@@ -13,7 +13,8 @@ quicksmart() {
                               -e "Hours"\
                               -e "Uncorrectable"\
                        | awk '{print $2,$4,$5,$6,$9,$10}' | column -t; echo
-    sep 75
+    #sep 75
+    echo "---------------------------"
   done
 }
 

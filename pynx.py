@@ -86,8 +86,10 @@ class ExecutingCommand(object):
 
     if self.get_output:
       stdout=subprocess.PIPE
+      stderr=subprocess.PIPE
     else:
       stdout=None
+      stderr=None
 
     platform=get_platform()
     # close fds on non-windows
@@ -101,8 +103,12 @@ class ExecutingCommand(object):
         cmd_arg_list = new_arg_list
 
     # for debugging
-    #print "EXECUTECOMMAND: " + repr(cmd_arg_list)
-    self.child=subprocess.Popen(cmd_arg_list,close_fds=close_fds,stdout=stdout)
+    print "EXECUTECOMMAND: " + repr(cmd_arg_list)
+    self.child=subprocess.Popen(
+        cmd_arg_list,
+        close_fds=close_fds,
+        stdout=stdout,
+        stderr=stderr)
     if wait:
       self.wait()
 
@@ -110,9 +116,10 @@ class ExecutingCommand(object):
     self.child.wait()
 
   def output(self):
-    """ Returns the program's stdout output, if it was captured.  Can be
-    called only once, and retrieves the entire output of the program. """
-    return self.child.communicate()[0]
+    """ Returns a tuple of the program's stdout and stderr output, if it was
+    captured.  Can be called only once, and retrieves the entire output of the
+    program. """
+    return self.child.communicate()
 
   def returnCode(self):
     return self.child.returncode
