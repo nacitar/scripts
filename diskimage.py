@@ -169,10 +169,7 @@ class DiskImage(object):
           offset=start_offset,
           size=end_offset-start_offset):
         part_dev=device+str(part.number)
-        if not DiskImage.makedev(system_device,part_dev):
-          print "Failed to link partition " + part_dev
-        else:
-          print "Added partition: " + part_dev
+        DiskImage.makedev(system_device,part_dev)
   @staticmethod
   def mount(filename):
     system_device=LOSetup.unused_loop()

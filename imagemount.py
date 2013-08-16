@@ -10,4 +10,4 @@ if __name__ == '__main__':
     sys.exit(1)
 
   for filename in sys.argv[1:]:
-    DiskImage.mount(filename)
+    print DiskImage.mount(filename)

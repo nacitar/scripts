@@ -103,7 +103,7 @@ class ExecutingCommand(object):
         cmd_arg_list = new_arg_list
 
     # for debugging
-    print "EXECUTECOMMAND: " + repr(cmd_arg_list)
+    #print "EXECUTECOMMAND: " + repr(cmd_arg_list)
     self.child=subprocess.Popen(
         cmd_arg_list,
         close_fds=close_fds,
