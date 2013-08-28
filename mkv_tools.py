@@ -84,9 +84,10 @@ def get_subseconds(timestamp):
 	parts.extend(lastparts)
 	return get_subseconds_from_parts(*parts)	
 
-def join_files(output,files,vlc_fix=True):
+def join_files(output,files,vlc_fix=False):
 	cmd = [ 'mkvmerge', '-o', output ] 
 	if vlc_fix:
+		raise Exception("Are you sure you want this VLC fix?!")
 		cmd.extend(["--engage", "no_cue_duration", "--engage", "no_cue_relative_position"])
 	first = True
 	for filename in files:
