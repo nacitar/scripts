@@ -150,3 +150,5 @@ def set_cover(filename,cover_filename):
   os.remove(big_cover[1])
   os.remove(small_cover[1])
 
+def set_audio_language(filename,language="eng"):
+  return ExecuteCommand(['mkvpropedit', 'filename', '--edit', 'track:a1', '--set', ('language=%s')%(language)]).returnCode()
