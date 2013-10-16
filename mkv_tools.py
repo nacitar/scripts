@@ -4,6 +4,61 @@ from pynx import *
 import os
 import tempfile
 
+def get_subseconds(timestamp):
+  parts=timestamp.split(':')
+  seconds=parts[-1]
+  del parts[-1]
+  lastparts=seconds.split('.')
+  args=[]
+  while len(parts) < 2:
+    parts.insert(0,"0")
+
+  if len(lastparts) == 1:
+    lastparts.append("0")
+  # 3 digits
+  while len(lastparts[1]) != 3:
+    lastparts[1] = lastparts[1]+"0"
+
+  parts.extend(lastparts)
+  return get_subseconds_from_parts(*parts)
+
+def get_audio_subseconds(filename):
+  cmd=[ 'ffmpeg',
+      '-i', filename,
+      '-vcodec', 'copy',
+      '-f', 'wav',
+      '-y',
+      '/dev/null', #TODO: make this work on windows
+  ]
+
+  output=ExecuteCommand(cmd,get_output=True).output()
+  timestamp=output[1].splitlines()[-2].split('time=')[1].split()[0]
+  return get_subseconds(timestamp)
+
+def ffmpeg_join(destination,files=None):
+  if files is None:
+    files=os.listdir('.')
+    files.sort()
+
+  cmd=[ 'ffmpeg',
+      '-y',
+      '-i', 'concat:' + "|".join(files),
+      '-acodec', 'copy',
+      destination ]
+  return ExecuteCommand(cmd).returnCode()
+
+def get_combined_offsets(files=None):
+  if files is None:
+    files=os.listdir('.')
+    files.sort()
+  offset=0
+  chapter_list = []
+  for filename in files:
+    length=get_audio_subseconds(filename)
+    chapter_list.append((get_timestamp(offset),filename))
+    offset += length
+  return chapter_xml(chapters_from_tuples(chapter_list))
+
 def make_chapter(start,name=None,lang="eng"):
   return keyword_object(start=start,name=name,lang=lang)
 
@@ -62,24 +117,6 @@ def get_timestamp(subseconds):
   return ("%02d:%02d:%02d.%03d") % (hours, mins, secs, subs)
 
 
-def get_subseconds(timestamp):
-  parts=timestamp.split(':')
-  seconds=parts[-1]
-  del parts[-1]
-  lastparts=seconds.split('.')
-  args=[]
-  while len(parts) < 2:
-    parts.insert(0,"0")
-
-  if len(lastparts) == 1:
-    lastparts.append("0")
-  # 3 digits
-  while len(lastparts[1]) != 3:
-    lastparts[1] = lastparts[1]+"0"
-
-  parts.extend(lastparts)
-  return get_subseconds_from_parts(*parts)
-
 def join_files(output,files,vlc_fix=False):
   cmd = [ 'mkvmerge', '-o', output ]
   if vlc_fix:
@@ -97,7 +134,18 @@ def join_files(output,files,vlc_fix=False):
 def clear_tags(filename):
   return ExecuteCommand([ 'mkvpropedit', '--tags', "global:", filename]).returnCode()
 
+def set_chapters(filename, chapters_xml_file):
+  return ExecuteCommand([
+      'mkvpropedit',
+      '--chapters', chapters_xml_file,
+      filename]).returnCode()
+
+# GENRE (Audiobooks)
+# TITLE
+# DATE_RELEASED
+# ARTIST
 def set_tags(filename,tagdict):
+  # TODO: don't assume english
 
   tag_lines = [
     "<?xml version=\"1.0\" encoding=\"ISO-8859-1\"?>",
@@ -109,6 +157,7 @@ def set_tags(filename,tagdict):
       "    <Simple>",
       ("      <Name>%s</Name>") % (key),
       ("      <String>%s</String>") % (value),
+      ("      <TagLanguage>eng</TagLanguage>"),
       "    </Simple>" ])
   tag_lines.extend([
     "  </Tag>",
@@ -136,16 +185,25 @@ def set_cover(filename,cover_filename):
   ExecuteCommand(['convert', cover_filename, '-resize', 'x600', big_cover[1]])
   ExecuteCommand(['convert', cover_filename, '-resize', 'x120', small_cover[1]])
 
+  # TODO: make this delete all attachments then add, not replace
+  for i in range(0,50):
+    ignore=ExecuteCommand([
+        'mkvpropedit',
+        '--delete-attachment', '1',
+        filename],get_output=True).output()
+
   ExecuteCommand([
-    'mkvpropedit',
-    '--attachment-name', 'cover'+ext,
-    '--replace-attachment', big_cover[1],
-    filename])
+      'mkvpropedit',
+      '--attachment-name', 'cover_small'+ext,
+      '--add-attachment', small_cover[1],
+      filename])
+
   ExecuteCommand([
-    'mkvpropedit',
-    '--attachment-name', 'cover_small'+ext,
-    '--replace-attachment', small_cover[1],
-    filename])
+      'mkvpropedit',
+      '--attachment-name', 'cover'+ext,
+      '--add-attachment', big_cover[1],
+      filename])
+
 
   os.remove(big_cover[1])
   os.remove(small_cover[1])

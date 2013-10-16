@@ -124,7 +124,7 @@ class ExecutingCommand(object):
   def returnCode(self):
     return self.child.returncode
 
-def ExecuteCommand(arg_list,get_output=False):
+def ExecuteCommand(arg_list,get_output=False,wait=True):
   """ Executes the provided command/argument list and returns either the returncode if get_output=False, or a tuple of the returncode
   and the program output as a list if get_output=True
 
