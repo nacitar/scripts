@@ -4,7 +4,7 @@ from pynx import *
 import os
 import tempfile
 
-def get_subseconds(timestamp):
+def get_milliseconds(timestamp):
   parts=timestamp.split(':')
   seconds=parts[-1]
   del parts[-1]
@@ -20,9 +20,9 @@ def get_subseconds(timestamp):
     lastparts[1] = lastparts[1]+"0"
 
   parts.extend(lastparts)
-  return get_subseconds_from_parts(*parts)
+  return get_milliseconds_from_parts(*parts)
 
-def get_audio_subseconds(filename):
+def get_audio_milliseconds(filename):
   cmd=[ 'ffmpeg',
       '-i', filename,
       '-vcodec', 'copy',
@@ -33,7 +33,7 @@ def get_audio_subseconds(filename):
 
   output=ExecuteCommand(cmd,get_output=True).output()
   timestamp=output[1].splitlines()[-2].split('time=')[1].split()[0]
-  return get_subseconds(timestamp)
+  return get_milliseconds(timestamp)
 
 def ffmpeg_join(destination,files=None):
   if files is None:
@@ -54,7 +54,7 @@ def get_combined_offsets(files=None):
   offset=0
   chapter_list = []
   for filename in files:
-    length=get_audio_subseconds(filename)
+    length=get_audio_milliseconds(filename)
     chapter_list.append((get_timestamp(offset),filename))
     offset += length
   return chapter_xml(chapters_from_tuples(chapter_list))
@@ -99,20 +99,20 @@ def chapter_xml(chapter_list):
 
   return os.linesep.join(xml_lines)
 
-def get_subseconds_from_parts(hour, minute, second, subsecond):
+def get_milliseconds_from_parts(hour, minute, second, subsecond):
   return ((int(hour) * 60 + int(minute)) * 60 + int(second)) * 1000 + int(subsecond)
 
-def get_timestamp(subseconds):
-  subs=subseconds % 1000
-  subseconds /= 1000
+def get_timestamp(milliseconds):
+  subs=milliseconds % 1000
+  milliseconds /= 1000
 
-  secs=subseconds % 60
-  subseconds /= 60
+  secs=milliseconds % 60
+  milliseconds /= 60
 
-  mins=subseconds % 60
-  subseconds /= 60
+  mins=milliseconds % 60
+  milliseconds /= 60
 
-  hours = subseconds
+  hours = milliseconds
 
   return ("%02d:%02d:%02d.%03d") % (hours, mins, secs, subs)
 
