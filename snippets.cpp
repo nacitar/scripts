@@ -1,5 +1,6 @@
 #include <memory>
 
+//http://stackoverflow.com/a/14905204
 struct HandleCloser {
     typedef HANDLE pointer;
     void operator()(HANDLE h) {
