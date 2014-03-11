@@ -95,13 +95,6 @@ class ExecutingCommand(object):
     # close fds on non-windows
     close_fds=(platform != Platform.WIN)
 
-    # TODO: fix this mac hack?
-    if platform == Platform.MAC:
-      if cmd_arg_list and cmd_arg_list[0].endswith('.app'):
-        new_arg_list = [ '/usr/bin/open', '-W' ]
-        new_arg_list.extend(cmd_arg_list)
-        cmd_arg_list = new_arg_list
-
     # for debugging
     #print "EXECUTECOMMAND: " + repr(cmd_arg_list)
     self.child=subprocess.Popen(
