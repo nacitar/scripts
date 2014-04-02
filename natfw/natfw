@@ -1,0 +1,322 @@
+#!/bin/bash
+
+###############################################################################
+#
+# SCRIPT: iptables NAT/Firewall
+# AUTHOR: Jacob McIntosh
+#
+# BONUS: After this script, there's an iptables packet flow diagram.
+#
+###############################################################################
+
+# NOTE: By default, all iptables commands refer to the FILTER table (-t filter) 
+
+
+
+# Change to this script's directory
+cd `dirname "$0"`
+
+PATH=/usr/sbin:/sbin:$PATH
+
+#
+# ROOT CHECK
+#
+
+# Force this script to exit with an error if not ran as root
+if [ "$(id -u)" != "0" ]; then
+	echo "This script must be run as root" 2>&1
+	exit 1
+fi
+
+#
+# CONFIGURATION FUNCTIONS
+#
+
+iface_net=''
+iface_lan=''
+ipt_outfile=''
+valid_protocol() # <tcp|udp>
+{
+	if [ "$#" -ne "1" ] || [ "$1" != "tcp" ] && [ "$1" != "udp" ]; then
+		echo "ERROR: protocol must be either 'tcp' or 'udp'" >&2
+		return 1
+	fi
+	return 0
+}
+
+set_outfile() # [<filename>]
+{
+	if [ "$#" -gt "1" ]; then
+		echo "usage: set_outfile [<filename>]" >&2
+		exit 1
+	fi
+	ipt_outfile="$1"
+	return 0
+}
+		
+	
+set_internal_external() # <eth1|eth0|...> <eth0|eth1|...>
+{
+	if [ "$#" -ne "2" ]; then
+		echo "usage: set_internal_external <internal_iface> <external_iface>" >&2
+		exit 1
+	fi
+	iface_lan="$1"
+	iface_net="$2"
+	return 0
+}
+
+iptfw_open_port=()
+open_port() # <tcp|udp> <port>
+{
+	if [ "$#" -ne "2" ] || ! valid_protocol "$1"; then
+		echo "usage: open_port <tcp|udp> <port>" >&2
+		exit 1
+	fi
+	iptfw_open_port+=("$1" "$2")
+	return 0
+}
+iptfw_forward_port=()
+forward_port() # tcp|udp external_port internal_ip [ internal_port ]
+{
+	if [ "$#" -ne "3" ] && [ "$#" -ne "4" ] || ! valid_protocol "$1"; then
+		echo "usage: forward_port <tcp|udp> <external_port> <internal_ip> [<internal_port>]" >&2
+		exit 1
+	fi
+	if [[ "$#" == 4 ]]; then
+		iptfw_forward_port+=("$1" "$2" "$3" "$4")
+	else
+		# use external port for internal port too
+		iptfw_forward_port+=("$1" "$2" "$3" "$2")
+	fi
+	return 0
+}
+
+# Source the user script
+. natfw.conf
+
+check_interfaces() #
+{
+	if [ "$iface_net" == "" ] || [ "$iface_lan" == "" ]; then
+		echo "ERROR: you must call 'set_internal_external' before applying rules!" >&2
+		return 1
+	fi
+	return 0
+}
+
+# Bail if the user never set up the interfaces
+if ! check_interfaces; then
+	exit 1
+fi
+
+#
+# KERNEL SUPPORT
+#
+
+# Load modules (not required if built into kernel; but can't hurt)
+
+# Load iptables modules
+modprobe ip_tables
+modprobe nf_conntrack
+modprobe nf_conntrack_ftp
+modprobe nf_conntrack_irc
+modprobe nf_nat
+modprobe nf_nat_ftp
+modprobe iptable_mangle
+modprobe iptable_nat
+modprobe iptable_filter
+modprobe ipt_state
+
+# Convenience strings for specifying connection state in rules
+state_established='-m state --state ESTABLISHED,RELATED'
+state_new='-m state --state NEW'
+
+# Enable NAT in the kernel
+echo 1 > /proc/sys/net/ipv4/ip_forward
+# Allow detection of a new dynamic address (if any)
+echo 1 > /proc/sys/net/ipv4/ip_dynaddr
+
+
+#
+# TABLE CLEARING
+#
+
+# Set all default policies to ACCEPT, clear all rules, chains, and counters
+# This restores iptables to the state of a fresh configuration.
+clear_all_rules() #
+{
+	for table in mangle nat filter; do
+		# All tables have OUTPUT
+		iptables -t $table -P OUTPUT ACCEPT
+
+		# NAT table doesn't exist for INPUT or FORWARD chains
+		if [ "$table" != "nat" ]; then
+			iptables -t $table -P INPUT ACCEPT
+			iptables -t $table -P FORWARD ACCEPT
+		fi
+		# FILTER table doesn't exist for PREROUTING or POSTROUTING chains
+		if [ "$table" != "filter" ]; then
+			iptables -t $table -P PREROUTING ACCEPT
+			iptables -t $table -P POSTROUTING ACCEPT
+		fi
+			
+		# Delete the table's rules
+		iptables -t $table -F
+		# Delete the table's chains
+		iptables -t $table -X
+		# Zero the table's counters
+		iptables -t $table -Z 
+	done
+}
+
+clear_all_rules
+
+#
+# PREROUTING AND FORWARD CHAIN RULES
+#
+
+apply_port_forwarding() # tcp|udp external_port internal_ip internal_port
+{
+	if [ "$#" -ne "4" ] || ! valid_protocol "$1"; then
+		echo "usage: apply_port_forwarding <tcp|udp> <external_port> <internal_ip> <internal_port>" >&2
+		return 1
+	fi
+	# NET: Redirect connections from given port on NET
+	# to given destination ip and port on LAN
+	iptables -t nat -A PREROUTING -p $1 -i $iface_net --dport $2 -j DNAT --to $3:$4
+	# NET: Allow forwarding to LAN for the forwarded internal port
+	iptables -A FORWARD -p $1 -i $iface_net -d $3 --dport $4 -o $iface_lan -j ACCEPT
+}
+
+# NET: Forward established connections to LAN
+iptables -A FORWARD -i $iface_net -o $iface_lan $state_established -j ACCEPT
+
+# LAN: Forward connections to NET
+iptables -A FORWARD -i $iface_lan -o $iface_net -j ACCEPT
+
+# pass four fields at a time to apply port forwarding
+for (( i=0; i<${#iptfw_forward_port[@]}; i=$(($i+4)) ))
+do
+	apply_port_forwarding ${iptfw_forward_port[@]:$i:4}
+done
+
+# ALL: Drop all forwarding packets we didn't ACCEPT above
+iptables -A FORWARD -j DROP
+
+
+#
+# INPUT CHAIN RULES
+#
+
+# ALL: Allow incoming established connections
+iptables -A INPUT $state_established -j ACCEPT
+
+# LO: Allow new incoming connections
+iptables -A INPUT -i lo $state_new -j ACCEPT
+
+# LAN: Allow incoming connections on any port
+iptables -A INPUT -i $iface_lan $state_new -j ACCEPT
+
+apply_port_opening() # tcp|udp port
+{
+	if [ "$#" -ne "2" ] || ! valid_protocol "$1"; then
+		echo "usage: apply_port_opening <tcp|udp> <port>" >&2
+		return 1
+	fi
+	# NET: Allow incoming connection on specified protocol/port
+	iptables -A INPUT -i $iface_net -p $1 --dport $2 $state_new -j ACCEPT
+	return 0
+}
+
+# pass two fields at a time to apply port opening
+for (( i=0; i<${#iptfw_open_port[@]}; i=$(($i+2)) ))
+do
+	apply_port_opening ${iptfw_open_port[@]:$i:2}
+done
+
+# ALL: Drop all other incoming connections
+iptables -A INPUT -j DROP
+
+
+#
+# OUTPUT CHAIN RULES
+#
+
+# ALL: Allow all outgoing connections
+iptables -A OUTPUT -j ACCEPT
+
+
+#
+# POSTROUTING CHAIN RULES
+#
+
+# NET: If the connection is outgoing to NET, masquerade it as your own
+# - SAME AS: iptables -t nat -A POSTROUTING -o $iface_net -j SNAT --to NET_IP_HERE
+iptables -t nat -A POSTROUTING -o $iface_net -j MASQUERADE
+
+#if [ "$ipt_outfile" != "" ]; then
+#	if iptables-save > "$ipt_outfile"; then
+#		echo "iptables rules saved to \"$ipt_outfile\""
+#		echo
+		echo "NOTE: configure your network interface to auto-load these rules, as follows"
+		echo "  iface eth0 inet dhcp"
+		echo "    pre-up bash /home/tux/router/natfw"
+#		echo "    pre-up iptables-restore < \"$ipt_outfile\""
+#		echo
+#	fi
+#fi
+echo "iptables rules are now applied"
+exit 0
+
+###############################################################################
+#
+#  FIGURE 1: Flow diagram to show when each chain's rules are applied.
+#       KEY: Brackets table application in the chain: [M]angle, [N]at, [F]ilter
+#
+#         MINE?
+#         _____       _____       ______
+#        / PRE \     /     \     / POST \
+# IN -->|ROUTING|-->|FORWARD|-->|ROUTING |--> OUT
+#       | [M,N] |   | [M,F] |   | [M,N]  |
+#        \_____/  N  \_____/     \______/
+#            | Y                    ^
+#            v                      |
+#           ___                    _____  
+#          /   \                  /     \ 
+#         |INPUT|                |OUTPUT |
+#         |[M,F]|                |[M,N,F]|
+#          \___/                  \_____/ 
+#            |                      ^    
+#            |                      |
+#             ---> Local Process ---
+#
+###############################################################################
+#
+#  DESCRIPTION:
+#
+#  When packets enter the router, iptables makes a "Routing Decision" The
+#  router will decide if the packet needs to be forwarded, or if it is
+#  destined for a local interface on the router.
+#
+#  If the router needs to forward the packet,
+#  iptables will add it to the FORWARD chain.
+#
+#  If the packet is destined for a local interface on the router,
+#  iptables will add it to the INPUT chain.
+#
+#  If a local process on the router is generating a
+#  packet it will pass through the OUTPUT chain.
+#
+#  By default, each of the chains will accept any packet.
+#
+#  Each chain applies tables in the order: Mangle, Nat, Filter
+#  However:
+#  - PREROUTING and POSTROUTING chains have no FILTER table
+#  - INPUT and FORWARD chains have no NAT table
+#
+###############################################################################
+#
+#  SOURCE: http://support.imagestream.com/iptables_Firewall.html
+#  * changes have been made to the diagram and documentation provided here.
+#
+###############################################################################
