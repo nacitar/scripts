@@ -1,9 +1,10 @@
 #!/bin/bash
+# natfw
 
 ###############################################################################
 #
 # SCRIPT: iptables NAT/Firewall
-# AUTHOR: Jacob McIntosh
+# AUTHOR: nacitar sevaht
 #
 # BONUS: After this script, there's an iptables packet flow diagram.
 #
@@ -14,7 +15,9 @@
 
 
 # Change to this script's directory
-cd `dirname "$0"`
+data_dir="/etc/firewall"
+ipt_savefile="$data_dir/saved.ipt"
+conf_file="$data_dir/natfw.conf"
 
 PATH=/usr/sbin:/sbin:$PATH
 
@@ -28,13 +31,22 @@ if [ "$(id -u)" != "0" ]; then
 	exit 1
 fi
 
+if [ "$1" == "restore" ]; then
+	if iptables-restore < "$ipt_savefile"; then
+		echo "Successfully restored iptables settings."
+		exit 0
+	fi
+	echo "ERROR: failed to restore iptables settings."
+	exit 1
+fi
+
 #
 # CONFIGURATION FUNCTIONS
 #
 
 iface_net=''
 iface_lan=''
-ipt_outfile=''
+ping_allowed=0
 valid_protocol() # <tcp|udp>
 {
 	if [ "$#" -ne "1" ] || [ "$1" != "tcp" ] && [ "$1" != "udp" ]; then
@@ -44,17 +56,6 @@ valid_protocol() # <tcp|udp>
 	return 0
 }
 
-set_outfile() # [<filename>]
-{
-	if [ "$#" -gt "1" ]; then
-		echo "usage: set_outfile [<filename>]" >&2
-		exit 1
-	fi
-	ipt_outfile="$1"
-	return 0
-}
-		
-	
 set_internal_external() # <eth1|eth0|...> <eth0|eth1|...>
 {
 	if [ "$#" -ne "2" ]; then
@@ -66,6 +67,10 @@ set_internal_external() # <eth1|eth0|...> <eth0|eth1|...>
 	return 0
 }
 
+allow_ping() #
+{
+  ping_allowed=1
+}
 iptfw_open_port=()
 open_port() # <tcp|udp> <port>
 {
@@ -93,7 +98,7 @@ forward_port() # tcp|udp external_port internal_ip [ internal_port ]
 }
 
 # Source the user script
-. natfw.conf
+. "$conf_file"
 
 check_interfaces() #
 {
@@ -125,16 +130,31 @@ modprobe nf_nat_ftp
 modprobe iptable_mangle
 modprobe iptable_nat
 modprobe iptable_filter
-modprobe ipt_state
+
+# one of these will fail
+modprobe xt_state || modprobe ipt_state
 
 # Convenience strings for specifying connection state in rules
 state_established='-m state --state ESTABLISHED,RELATED'
 state_new='-m state --state NEW'
 
+
 # Enable NAT in the kernel
 echo 1 > /proc/sys/net/ipv4/ip_forward
 # Allow detection of a new dynamic address (if any)
 echo 1 > /proc/sys/net/ipv4/ip_dynaddr
+
+sysctl_file="/etc/sysctl.conf"
+if [ -r "$sysctl_file" ]; then
+	echo "- BOTH NEED TO BE SET, IF NOT, FIX /etc/sysctl.conf"
+	cat "$sysctl_file" | grep "net\.ipv4\.ip_forward"
+	cat "$sysctl_file" | grep "net\.ipv4\.ip_dynaddr"
+	echo "- If the above does not show 1 for both, then rebooting will break it."
+	echo
+else
+	echo "- NO sysctl.conf found!  You must ensure ip_forward and ip_dynaddr are 1!"
+	echo
+fi
 
 
 #
@@ -234,6 +254,10 @@ do
 	apply_port_opening ${iptfw_open_port[@]:$i:2}
 done
 
+# allow ping
+if [ "$ping_allowed" -eq 1 ]; then
+  iptables -A INPUT -i $iface_net -p icmp --icmp-type echo-request -j ACCEPT
+fi
 # ALL: Drop all other incoming connections
 iptables -A INPUT -j DROP
 
@@ -254,18 +278,21 @@ iptables -A OUTPUT -j ACCEPT
 # - SAME AS: iptables -t nat -A POSTROUTING -o $iface_net -j SNAT --to NET_IP_HERE
 iptables -t nat -A POSTROUTING -o $iface_net -j MASQUERADE
 
-#if [ "$ipt_outfile" != "" ]; then
-#	if iptables-save > "$ipt_outfile"; then
-#		echo "iptables rules saved to \"$ipt_outfile\""
-#		echo
-		echo "NOTE: configure your network interface to auto-load these rules, as follows"
-		echo "  iface eth0 inet dhcp"
-		echo "    pre-up bash /home/tux/router/natfw"
-#		echo "    pre-up iptables-restore < \"$ipt_outfile\""
-#		echo
-#	fi
-#fi
-echo "iptables rules are now applied"
+iptables_service="/etc/init.d/iptables"
+if [ -x "$iptables_service" ]; then
+	if "$iptables_service" save; then
+		echo "iptables service saved settings successfully."
+	else
+		echo "ERROR: iptables service failed to save settings."
+	fi
+fi
+
+if iptables-save > "$ipt_savefile"; then
+	echo "iptables settings were saved locally."
+else
+	echo "ERROR: iptables settings failed to save locally."
+fi
+
 exit 0
 
 ###############################################################################
