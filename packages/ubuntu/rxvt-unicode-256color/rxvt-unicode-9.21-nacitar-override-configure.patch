@@ -1,0 +1,41 @@
+--- debian/rules	2016-04-29 12:50:07.119526666 -0500
++++ debian/rules	2016-04-29 12:51:40.483005352 -0500
+@@ -64,6 +64,8 @@
+     CXXFLAGS="$(CXXFLAGS)" \
+     LDFLAGS="$(LDFLAGS)"
+ 
++cfgoverride = --disable-iso14755 --disable-mousewheel --disable-fading --disable-text-blink
++
+ config.status: | $(BACKED_UP_FILES) configure
+ 	dh_autotools-dev_updateconfig
+ 
+@@ -86,7 +88,8 @@
+ 	    --enable-slipwheeling \
+ 	    --enable-smart-resize \
+ 	    --enable-startup-notification \
+-	    --with-term=rxvt-unicode
++	    --with-term=rxvt-unicode \
++	    $(cfgoverride)
+ 
+ conf-unicode-256color:
+ 	$(flagscommon) ./configure $(cfgcommon) \
+@@ -108,7 +111,8 @@
+ 	    --enable-slipwheeling \
+ 	    --enable-smart-resize \
+ 	    --enable-startup-notification \
+-	    --with-term=rxvt-unicode-256color
++	    --with-term=rxvt-unicode-256color \
++	    $(cfgoverride)
+ 
+ conf-unicode-lite:
+ 	$(flagscommon) ./configure $(cfgcommon) \
+@@ -117,7 +121,8 @@
+ 	    --disable-perl \
+ 	    --disable-iso14755 \
+ 	    --disable-startup-notification \
+-	    --with-term=rxvt-unicode
++	    --with-term=rxvt-unicode \
++	    $(cfgoverride)
+ 
+ build: build-arch build-indep
+ build-arch: build-stamp
