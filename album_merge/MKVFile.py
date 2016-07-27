@@ -5,11 +5,8 @@ import sys
 import subprocess
 import shutil
 
-
-
 import unit
 import uid
-from timestamp import Timestamp
 import markup
 import flac
 import util
@@ -64,7 +61,6 @@ def scanDirectory(dirname, db):
             images.append(image)
 
     return (tracks, images)
-
 
 #cover.jpg              - 600 x [>=600] (portrait/square) first attachment
 #small_cover.jpg        - 120 x [>=120] (portrait/square)
@@ -141,14 +137,13 @@ def prepare_flac_album(source_dir, dest_dir):
             sample_rate = track.sample_rate
         elif sample_rate != track.sample_rate:
             raise RuntimeError('Cannot combine different sample rates.')
-        timestamp = Timestamp(sample_offset * unit.SEC / sample_rate)
         # Seek points
         seekpoints.append(sample_offset)  # start of track
 
         # Chapters
         chapter = markup.Chapter(
                 uid=str(uid_group.generate()),
-                start_time=str(timestamp))
+                start_time=sample_offset * unit.SEC / sample_rate)
         sample_offset += track.total_samples
         chapter.add_comment(track.filename)
         chapter_xml.chapters().append(chapter)
@@ -234,7 +229,6 @@ def prepare_flac_album(source_dir, dest_dir):
                 file=sys.stderr)
     return int(not (flac_ret == 0 and sox_ret == 0))  # 0 == success
 
-
 def assemble_mkv(source_dir, dest_dir):
     input_file = os.path.join(source_dir, 'merged.flac')
     output_file = os.path.join(dest_dir, 'output.mka')
@@ -261,8 +255,9 @@ def assemble_mkv(source_dir, dest_dir):
     child = subprocess.Popen(command)
     return child.wait()
 
-
-
+# ./album_merge.py prepare input/ staging/
+# # check xml and files
+# ./album_merge.py assemble staging/ output/  
 # NOTE: still have to do album replay gain scan with foobar2000, because
 # metaflac uses an older inferior algorithm
 def main():
