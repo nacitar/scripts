@@ -298,24 +298,25 @@ exit 0
 ###############################################################################
 #
 #  FIGURE 1: Flow diagram to show when each chain's rules are applied.
-#       KEY: Brackets table application in the chain: [M]angle, [N]at, [F]ilter
+#       KEY: Brackets table application in the chain:
+#            [R]aw, [M]angle, [N]at, [F]ilter, [S]ecurity
 #
 #         MINE?
-#         _____       _____       ______
-#        / PRE \     /     \     / POST \
-# IN -->|ROUTING|-->|FORWARD|-->|ROUTING |--> OUT
-#       | [M,N] |   | [M,F] |   | [M,N]  |
-#        \_____/  N  \_____/     \______/
-#            | Y                    ^
-#            v                      |
-#           ___                    _____  
-#          /   \                  /     \ 
-#         |INPUT|                |OUTPUT |
-#         |[M,F]|                |[M,N,F]|
-#          \___/                  \_____/ 
-#            |                      ^    
-#            |                      |
-#             ---> Local Process ---
+#         _______       _______       ______
+#        /  PRE  \     /       \     / POST \
+# IN -->| ROUTING |-->| FORWARD |-->|ROUTING |--> OUT
+#       | [R,M,N] |   | [M,F,S] |   | [M,N]  |
+#        \_______/  N  \_______/     \______/
+#            | Y                        ^
+#            v                          |
+#         _______                  ___________
+#        /       \                /           \
+#       |  INPUT  |              |   OUTPUT    |
+#       | [M,F,S] |              | [R,M,N,F,S] |
+#        \_______/                \___________/
+#            |                          ^
+#            |                          |
+#             -----> Local Process -----
 #
 ###############################################################################
 #

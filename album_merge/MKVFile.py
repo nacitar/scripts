@@ -17,16 +17,6 @@ import file_db
 
 ############
 
-import enum
-
-class AttachmentType(enum.Enum):
-    COVER = 0
-    SMALL_COVER = 1
-    COVER_LAND = 2
-    SMALL_COVER_LAND = 3
-    FULL_COVER = 4
-    FULL_COVER_LAND = 5
-    OTHER = 6
 
 # req sox
 def mergeAudio(files, output='-'):
@@ -62,11 +52,11 @@ def imageResize(input_filename, output_filename, width='', height=''):
             stdout=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL)
     return (child.wait() == 0)
-    
+
 def prepare_flac_album(dirname, staging_dir):
     picture_db = file_db.FileDB()
     uid_group = uid.Group()
-    
+
     files = os.listdir(dirname)
     flac_files = []
 
@@ -94,7 +84,7 @@ def prepare_flac_album(dirname, staging_dir):
                     os.path.join(staging_dir, lower_name))
 
     flac_files.sort()
-    
+
     track_list = {}
 
     chapter_file = markup.ChapterFile()
@@ -138,7 +128,7 @@ def prepare_flac_album(dirname, staging_dir):
         sample_offset += track.total_samples
         chapter.add_comment(basename)
         chapter_file.chapters().append(chapter)
-        
+
         # Tagging
         track_tag = markup.Tag('30', 'TRACK', chapter.uid())
         track_tag.add_comment(basename)
@@ -177,16 +167,16 @@ def prepare_flac_album(dirname, staging_dir):
                 if picture not in our_list:
                     our_list.append(picture)
             pictures[picture_type] = our_list
-    
+
     with open(os.path.join(staging_dir, 'chapters.xml'), 'wb') as handle:
-        chapter_file.write(handle) 
+        chapter_file.write(handle)
     with open(os.path.join(staging_dir, 'tags.xml'), 'wb') as handle:
-        tag_file.write(handle) 
+        tag_file.write(handle)
 
     for picture_type, picture_list  in pictures.items():
         i = 0
         for picture in picture_list:
-            basename = ('flacgen_' + picture_type.name.lower() + 
+            basename = ('flacgen_' + picture_type.name.lower() +
                     '_' + str(i) + '.' + picture.type())
             i += 1
             util.write_file(os.path.join(staging_dir, basename),
@@ -276,7 +266,7 @@ def main():
     if False:
         prepare_flac_album('type2', 'staging')
         prepare_covers('staging')
-	if False:
+    if False:
         assemble_mkv('staging')
 
     return 0
