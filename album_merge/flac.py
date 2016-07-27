@@ -169,6 +169,7 @@ class MetaListParser(object):
 class FLAC(object):
 
     def __init__(self, filename, picture_db = None):
+        self.filename = filename
         self.sample_rate = None
         self.total_samples = None
         self._comments = {}
@@ -184,7 +185,7 @@ class FLAC(object):
         child = subprocess.Popen(['metaflac',
                 '--list', '--no-utf8-convert',
                 '--block-type=' + ','.join([value.name for value in desired]),
-                filename],
+                self.filename],
                 stdout = subprocess.PIPE, stderr = subprocess.DEVNULL)
         encoding = sys.stdout.encoding
 
