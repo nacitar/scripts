@@ -121,6 +121,12 @@ def prepare_flac_album(source_dir, dest_dir):
         album_date,
         album_total_tracks])
 
+    album_field_map = {
+        'ALBUMARTIST': album_artist,
+        'ALBUM': album_title,
+        'DATE': album_date
+    }
+
     tag_xml.tags().append(album_tag)
 
     album_tag.add_comment(source_dir)
@@ -129,6 +135,10 @@ def prepare_flac_album(source_dir, dest_dir):
 
     sample_offset = 0
     sample_rate = None
+
+    # Used in a comment later
+    accompaniment = markup.Field('ACCOMPANIMENT')
+    accompaniment.prettify()
 
     pictures = {}
     seekpoints = []
@@ -161,24 +171,48 @@ def prepare_flac_album(source_dir, dest_dir):
             track_number,
             track_title,
             track_lyrics])
+        # for editing convenience
+        track_tag.add_comment('\n{}'.format(accompaniment))
+
+        track_field_map = {
+            'ARTIST': track_artist,
+            'TRACKNUMBER': track_number,
+            'TITLE': track_title,
+            'UNSYNCEDLYRICS': track_lyrics,
+        }
+
         tag_xml.tags().append(track_tag)
         for key, value in track.comments().items():
-            if key == 'ALBUMARTIST':
-                album_artist.set_value(value)
-            elif key == 'ALBUM':
-                album_title.set_value(value)
-            elif key == 'DATE':
-                album_date.set_value(value)
-            elif key == 'ARTIST':
-                track_artist.set_value(value)
-            elif key == 'TRACKNUMBER':
-                track_number.set_value(value)
-            elif key == 'TITLE':
-                track_title.set_value(value)
-            elif key == 'UNSYNCEDLYRICS':
-                track_lyrics.set_value(value)
+            field = album_field_map.get(key)
+            if field is not None:
+                orig_value = field.value()
+                if orig_value and orig_value != value:
+                    raise ValueError('Conflicting album field values: '
+                            ' {}: {} != {}'.format(key, orig_value, value))
+                field.set_value(value)
             else:
-                print('Ignoring tag:', key, '=', value)
+                field = track_field_map.get(key)
+                if field is not None:
+                    if key == 'ARTIST':
+                        album_value = album_artist.value()
+                        if not album_value:
+                            # set album artist
+                            album_artist.set_value(value)
+                        if value == album_value:
+                            track_artist.set_value('')
+                    else:
+                        if field.value():
+                            raise ValueError('Multiple field values on single'
+                                    ' track: {}'.format(key))
+                        field.set_value(value)
+                else:
+                    print('Ignoring tag:', key, '=', value)
+        # Remove empty fields
+        for field in track_field_map.values():
+            if not field.value():
+                track_tag.fields().remove(field)
+
+                        
         # Pictures
         for picture_type, picture_list in track.pictures().items():
             our_list = pictures.get(picture_type, [])
@@ -255,19 +289,49 @@ def assemble_mkv(source_dir, dest_dir):
     child = subprocess.Popen(command)
     return child.wait()
 
+def check_split_accuracy(source_dir, split_dir):
+    tracks, images = scanDirectory(source_dir, None)
+    split_files = os.listdir(split_dir)
+    split_files.sort()
+
+    if len(tracks) != len(split_files):
+        raise RuntimeError('Number of tracks/files does not match.')
+
+    for i in range(len(tracks)):
+        sox = subprocess.Popen(['sox', '--info', os.path.join(split_dir,
+                split_files[i])], stdout = subprocess.PIPE)
+        output = sox.communicate()[0].decode(sys.stdout.encoding)
+        sox.wait()
+        
+        start = output.find('=', output.find('\nDuration')) + 2
+        end = output.find(' samples', start)
+
+        if tracks[i].total_samples != int(output[start:end]):
+            raise ValueError('Mismatch in {}'.format(tracks[i].filename))
+        print('MATCH: {}'.format(tracks[i].filename))
+
+    return 0
+
+
+
+    
+
+
 # ./album_merge.py prepare input/ staging/
 # # check xml and files
 # ./album_merge.py assemble staging/ output/  
 # NOTE: still have to do album replay gain scan with foobar2000, because
 # metaflac uses an older inferior algorithm
 def main():
-    PREPARE, ASSEMBLE = range(2)
+    PREPARE, ASSEMBLE, CHECKSPLIT = range(3)
     if len(sys.argv) == 4:
         arg = sys.argv[1].lower()
         if arg == 'prepare':
             command = PREPARE
         elif arg == 'assemble':
             command = ASSEMBLE
+        elif arg == 'checksplit':
+            command = CHECKSPLIT
         else:
             raise ValueError('Unknown command: {}'.format(command))
         source_dir = sys.argv[2]
@@ -279,6 +343,9 @@ def main():
         exit_code = prepare_flac_album(source_dir, dest_dir)
     elif command == ASSEMBLE:
         exit_code = assemble_mkv(source_dir, dest_dir)
+    elif command == CHECKSPLIT:
+        split_dir = dest_dir
+        exit_code = check_split_accuracy(source_dir, split_dir)
 
     return exit_code
 

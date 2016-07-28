@@ -130,6 +130,9 @@ class Container(Node):
         for element in elements:
             self.append(element)
 
+    def remove(self, element):
+        self.element().remove(element.element())
+
 
 # TODO: chapters can contain subchapters!
 # https://matroska.org/technical/specs/tagging/example-audio.html#whole
@@ -143,8 +146,8 @@ class Chapter(Node):
             element = ET.Element(Chapter.ROOT)
         super().__init__(element)
 
-        self._uid = Node.child(element, 'ChapterUID')
         self._start = Node.child(element, 'ChapterTimeStart')
+        self._uid = Node.child(element, 'ChapterUID')
         self._hidden = Node.child(element, 'ChapterFlagHidden')
         self._enabled = Node.child(element, 'ChapterFlagEnabled')
 
