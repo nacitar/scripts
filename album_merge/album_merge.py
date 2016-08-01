@@ -20,7 +20,7 @@ class Image(object):
         self.filename = filename
 
         child = subprocess.Popen(
-                ['identify', '-format', '%W %H %C', self.filename],
+                ['identify', '-format', '%W %H %m', self.filename],
                 stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL)
         result = child.communicate()[0]
@@ -31,12 +31,12 @@ class Image(object):
         parts = result.decode(sys.getdefaultencoding()).split(' ')
         self.width = int(parts[0])
         self.height = int(parts[1])
-        self.mime = parts[2].lower()
+        self.format = parts[2].lower()
 
     def extension(self):
-        if self.mime == 'jpeg':
+        if self.format == 'jpeg':
             return '.jpg'
-        return self.mime
+        return '.' + self.format
 
     def is_portrait(self):
         return self.height >= self.width
