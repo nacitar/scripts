@@ -187,13 +187,12 @@ class FLAC(object):
                 '--block-type=' + ','.join([value.name for value in desired]),
                 self.filename],
                 stdout = subprocess.PIPE, stderr = subprocess.DEVNULL)
-        encoding = sys.stdout.encoding
 
         block_type = None
 
         while True:
             # boilerplate
-            line = child.stdout.readline().decode(encoding)
+            line = child.stdout.readline().decode(sys.getdefaultencoding())
             if line == '':
                 line = None # will flush the parser
 

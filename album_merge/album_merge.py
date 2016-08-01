@@ -28,7 +28,7 @@ class Image(object):
             raise RuntimeError('Could not identify image properties for:'
                     ' {}'.format(self.filename))
 
-        parts = result.decode(sys.stdout.encoding).split(' ')
+        parts = result.decode(sys.getdefaultencoding()).split(' ')
         self.width = int(parts[0])
         self.height = int(parts[1])
         self.mime = parts[2].lower()
@@ -300,7 +300,7 @@ def check_split_accuracy(source_dir, split_dir):
     for i in range(len(tracks)):
         sox = subprocess.Popen(['sox', '--info', os.path.join(split_dir,
                 split_files[i])], stdout = subprocess.PIPE)
-        output = sox.communicate()[0].decode(sys.stdout.encoding)
+        output = sox.communicate()[0].decode(sys.getdefaultencoding())
         sox.wait()
         
         start = output.find('=', output.find('\nDuration')) + 2
