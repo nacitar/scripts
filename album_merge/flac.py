@@ -4,6 +4,9 @@ import enum
 import sys
 import subprocess
 
+import util
+import hashlib
+
 class PictureType(enum.IntEnum):
     OTHER = 0
     FILE_ICON_32 = 1
@@ -37,30 +40,19 @@ class BlockType(enum.IntEnum):
     PICTURE = 6
 
 class Picture(object):
-    def __init__(self, digest, description, mime):
+    def __init__(self, digest, description):
         self.digest = digest
         self.description = description
-        self.mime = mime.lower()
-
-
-    def type(self):
-        mime = self.mime.split('/',1)[1]
-        if mime in [ 'jpg', 'jpeg' ]:
-            return 'jpg'
-        elif mime == 'png':
-            return 'png'
-        raise ValueError('Unsupported MIME: ' + self.mime)
 
     def __eq__(self, other):
         return (self.digest == other.digest and
-                self.description == other.description and
-                self.mime == other.mime)
+                self.description == other.description)
 
     def __ne__(self, other):
         return not self.eq(other)
 
     def __hash__(self):
-        return hash((self.digest, self.description, self.mime))
+        return hash((self.digest, self.description))
 
 BLOCK_PREFIX = 'METADATA block #'
 
@@ -164,39 +156,44 @@ class MetaListParser(object):
             # store the new key for processing
             self.current_field = next_field
         return completed_field
-                
 
-class FLAC(object):
+# perhaps do picture meta separately
 
-    def __init__(self, filename, picture_db = None):
-        self.filename = filename
-        self.sample_rate = None
-        self.total_samples = None
-        self._comments = {}
-        self._pictures = {}
-        self._picture_db = picture_db
+class FLACMeta(object):
 
-        self._parser = MetaListParser()
+    def __init__(self, sample_rate, total_samples, channels,
+            comments = None, pictures = None):
+        self.sample_rate = sample_rate
+        self.total_samples = total_samples
+        self.channels = channels
+        self.comments = comments
+        self.pictures = pictures
+
+    @staticmethod
+    def from_file(filename, digest_map = None):
+        sample_rate = None
+        total_samples = None
+        comments = {}
+        pictures = {}
+        channels = 0
+
+        parser = MetaListParser()
 
         desired = [BlockType.STREAMINFO, BlockType.VORBIS_COMMENT]
-        if picture_db is not None:
+        if digest_map is not None:
             desired.append(BlockType.PICTURE)
 
         child = subprocess.Popen(['metaflac',
                 '--list', '--no-utf8-convert',
                 '--block-type=' + ','.join([value.name for value in desired]),
-                self.filename],
+                filename], stdin = subprocess.DEVNULL,
                 stdout = subprocess.PIPE, stderr = subprocess.DEVNULL)
 
         block_type = None
 
-        while True:
-            # boilerplate
-            line = child.stdout.readline().decode(sys.getdefaultencoding())
-            if line == '':
-                line = None # will flush the parser
-
-            field = self._parser.process_line(line)
+        for line in util.line_reader(child.stdout, terminate=True):
+            # after last line, we'll get None because terminate is True
+            field = parser.process_line(line)  # None will flush
             if field is not None:
                 # processing
                 if field.level == 0 and field.key == BLOCK_PREFIX:
@@ -211,14 +208,16 @@ class FLAC(object):
                         picture_description = None
                 elif block_type == BlockType.STREAMINFO:
                     if field.key == 'sample_rate':
-                        self.sample_rate = field.int_value()
+                        sample_rate = field.int_value()
                     elif field.key == 'total samples':
-                        self.total_samples = field.int_value()
+                        total_samples = field.int_value()
+                    elif field.key == 'channels':
+                        channels = field.int_value()
                 elif block_type == BlockType.VORBIS_COMMENT:
                     if (field.key.startswith('comment[') and
                             field.key.endswith(']')):
                         key, value = field.value.split('=', 1)
-                        self._comments[key] = value
+                        comments[key] = value
                 elif block_type == BlockType.PICTURE:
                     if field.key == 'data length':
                         picture_bytes = field.int_value()
@@ -226,8 +225,6 @@ class FLAC(object):
                         picture_type = PictureType(field.int_value())
                     elif field.key == 'data':
                         picture_data = bytearray()
-                    elif field.key == 'MIME type':  # TODO: keep?
-                        picture_mime = field.value
                     elif field.key == 'description':
                         picture_description = field.value
                     elif (picture_bytes != 0 and field.key ==
@@ -237,34 +234,26 @@ class FLAC(object):
                                         picture_bytes - len(picture_data))])
                         if len(picture_data) == picture_bytes:
                             # Add the image to the database, storing the digest
-                            digest = self._picture_db.add(picture_data)
+                            digest = hashlib.sha1(picture_data).digest()
+                            if digest not in digest_map:
+                                digest_map[digest] = picture_data
                             picture_bytes = 0
                             picture_data = None # allow freeing
                             # append the digest to the list if not present
                             # using list instead of set for defined order.
-                            picture = Picture(digest, picture_description,
-                                    picture_mime)
-                            picture_list = self._pictures.get(picture_type, [])
+                            picture = Picture(digest, picture_description)
+                            picture_list = pictures.get(picture_type, [])
                             if picture not in picture_list:
                                 picture_list.append(picture)
-                            self._pictures[picture_type] = picture_list
-            # boilerplate
-            if line is None:
-                break
+                            pictures[picture_type] = picture_list
         child.wait()
-
-    def comments(self):
-        return dict(self._comments)
-    
-    def pictures(self):
-        return dict(self._pictures)
+        return FLACMeta(sample_rate, total_samples, channels, comments, pictures)
 
 def main():
-    import file_db
-    picture_db = file_db.FileDB()
+    digest_map = {}
     filename = 'type2/Greydon Square - Type II - The Mandelbrot Set - 01 Galaxy Rise.flac'
     filename = 'out/test.flac'
-    flac = FLAC(filename, picture_db)
+    flac = FLACMeta(filename, digest_map)
     return 0
 
 if __name__ == '__main__':

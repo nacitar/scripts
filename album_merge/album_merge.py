@@ -10,39 +10,85 @@ import uid
 import markup
 import flac
 import util
-import file_db
 
-############
-
-# req imagemagick
-class Image(object):
-    def __init__(self, filename):
-        self.filename = filename
-
-        child = subprocess.Popen(
-                ['identify', '-format', '%W %H %m', self.filename],
-                stdout=subprocess.PIPE, stdin=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL)
-        result = child.communicate()[0]
-        if child.wait() != 0:
-            raise RuntimeError('Could not identify image properties for:'
-                    ' {}'.format(self.filename))
-
-        parts = result.decode(sys.getdefaultencoding()).split(' ')
-        self.width = int(parts[0])
-        self.height = int(parts[1])
-        self.format = parts[2].lower()
+class ImageMeta(object):
+    def __init__(self, format, width, height):
+        self.format = format
+        self.width = width
+        self.height = height
 
     def extension(self):
-        if self.format == 'jpeg':
+        ext = '.' + self.format.lower()
+        if ext == '.jpeg':
             return '.jpg'
-        return '.' + self.format
+        return ext
 
-    def is_portrait(self):
-        return self.height >= self.width
+    def landscape(self):
+        return self.width > self.height
 
-    def is_landscape(self):
-        return not self.is_portrait()
+    # NOTE: requires imagemagick
+    @staticmethod
+    def __identify(filename, stdin = subprocess.DEVNULL):
+        return subprocess.Popen(
+                ['identify', '-format', '%W %H %m', filename],
+                stdout=subprocess.PIPE, stdin=stdin,
+                stderr=subprocess.DEVNULL)
+
+    @staticmethod
+    def __process_output(child):
+        result = next(util.line_reader(child.stdout))  # one line
+        child.stdout.close()
+        if child.wait() != 0:
+            raise RuntimeError('Could not identify image properties.')
+        parts = result.split(' ', 2)
+        return ImageMeta(format = parts[2].lower(),
+                width = int(parts[0]), height = int(parts[1]))
+
+    @staticmethod
+    def from_file(filename):
+        child = ImageMeta.__identify(filename)
+        return ImageMeta.__process_output(child)
+
+    @staticmethod
+    def from_data(data):
+        child = ImageMeta.__identify('-', subprocess.PIPE)
+        child.stdin.write(data)
+        child.stdin.close()
+        return ImageMeta.__process_output(child)
+
+class Image(object):
+    def __init__(self, data):
+        self.set_data(data)
+
+    def set_data(self, data):
+        self._data = data
+        self._meta = None
+
+    def data(self):
+        return self._data
+
+    def meta(self):
+        if self._meta is None:
+            self._meta = ImageMeta.from_data(self._data)
+        return self._meta
+
+    @staticmethod
+    def from_file(filename):
+        data = bytearray()
+        with open(filename, 'rb') as handle:
+            for block in util.block_reader(handle):
+                data += block
+        return Image(data)
+
+
+# image has changed, need to update things
+# flac needs to have meta/from approach too?
+
+
+class FileMeta(object):
+    def __init__(self, filename, meta):
+        self.filename = filename
+        self.meta = meta
 
 def scanDirectory(dirname, db):
     files = os.listdir(dirname)
@@ -54,11 +100,11 @@ def scanDirectory(dirname, db):
         filename = os.path.join(dirname, basename)
         ext = os.path.splitext(basename)[1].lower()
         if ext == '.flac':
-            track = flac.FLAC(filename, db)
-            tracks.append(track)
+            tracks.append(FileMeta(filename,
+                    flac.FLACMeta.from_file(filename, db)))
         if ext in ['.jpg', '.jpeg', '.png']:
-            image = Image(filename)
-            images.append(image)
+            images.append(FileMeta(filename,
+                    ImageMeta.from_file(filename)))
 
     return (tracks, images)
 
@@ -70,8 +116,9 @@ def scanDirectory(dirname, db):
 COVER_OPTIONS = [
         [('cover', '', 600), ('small_cover', '', 120)],  # portrait
         [('cover', 600, ''), ('small_cover', 120, '')]]  # landscape
-def prepare_flac_album(source_dir, dest_dir):
-    picture_db = file_db.FileDB()
+def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
+        channels = None):
+    picture_db = {}
     uid_group = uid.Group()
 
     files = os.listdir(source_dir)
@@ -84,12 +131,12 @@ def prepare_flac_album(source_dir, dest_dir):
     image_names = set()
     for image in images:
         name = os.path.splitext(os.path.basename(image.filename))[0]
-        suffix = '_land' if image.is_landscape() else ''
-        ext = image.extension()
+        suffix = '_land' if image.meta.landscape() else ''
+        ext = image.meta.extension()
         if name.lower() == 'cover':
             name = 'full_cover' + suffix
         if name.lower() in ['full_cover', 'full_cover_land']:
-            for gen_name, width, height in COVER_OPTIONS[image.is_landscape()]:
+            for gen_name, width, height in COVER_OPTIONS[image.meta.landscape()]:
                 dest_name = gen_name + suffix + ext
                 # req imagemagick
                 convert = subprocess.Popen(['convert', image.filename,
@@ -134,7 +181,6 @@ def prepare_flac_album(source_dir, dest_dir):
     album_total_tracks.set_value(str(len(tracks)))
 
     sample_offset = 0
-    sample_rate = None
 
     # Used in a comment later
     accompaniment = markup.Field('ACCOMPANIMENT')
@@ -142,11 +188,38 @@ def prepare_flac_album(source_dir, dest_dir):
 
     pictures = {}
     seekpoints = []
+
+    # highest sample rate
+    if sample_rate is None:
+        sample_rate = max([track.meta.sample_rate for track in tracks])
+        print('Highest sample rate: {}'.format(sample_rate))
+
+    if channels is None:
+        channels = max([track.meta.channels for track in tracks])
+        print('Highest channels: {}'.format(channels))
+
     for track in tracks:
-        if sample_rate is None:
-            sample_rate = track.sample_rate
-        elif sample_rate != track.sample_rate:
-            raise RuntimeError('Cannot combine different sample rates.')
+        if (sample_rate != track.meta.sample_rate or
+                channels != track.meta.channels):
+            print('Resampling track from {}:{} to {}:{}'.format(
+                    track.meta.sample_rate, track.meta.channels,
+                    sample_rate, channels))
+            newfile = os.path.join(dest_dir, os.path.basename(track.filename))
+            # Resample
+            sox = subprocess.Popen(['sox', track.filename, newfile,
+                    'channels', str(channels), 'rate', str(sample_rate)],
+                    stdout=subprocess.DEVNULL,
+                    stdin=subprocess.DEVNULL)  # print errors to terminal
+            if sox.wait() != 0:
+                raise RuntimeError('Error upsampling ' + track.filename)
+            # Read new file
+            newtrack = flac.FLACMeta.from_file(newfile)
+            # update to refer to resampled file instead, but keeping original
+            # comments/pictures
+            track.filename = newfile
+            track.meta.sample_rate = newtrack.sample_rate
+            track.meta.total_samples = newtrack.total_samples
+
         # Seek points
         seekpoints.append(sample_offset)  # start of track
 
@@ -154,7 +227,7 @@ def prepare_flac_album(source_dir, dest_dir):
         chapter = markup.Chapter(
                 uid=str(uid_group.generate()),
                 start_time=sample_offset * unit.SEC / sample_rate)
-        sample_offset += track.total_samples
+        sample_offset += track.meta.total_samples
         chapter.add_comment(track.filename)
         chapter_xml.chapters().append(chapter)
 
@@ -182,7 +255,7 @@ def prepare_flac_album(source_dir, dest_dir):
         }
 
         tag_xml.tags().append(track_tag)
-        for key, value in track.comments().items():
+        for key, value in track.meta.comments.items():
             field = album_field_map.get(key)
             if field is not None:
                 orig_value = field.value()
@@ -214,7 +287,7 @@ def prepare_flac_album(source_dir, dest_dir):
 
                         
         # Pictures
-        for picture_type, picture_list in track.pictures().items():
+        for picture_type, picture_list in track.meta.pictures.items():
             our_list = pictures.get(picture_type, [])
             for picture in picture_list:
                 if picture not in our_list:
@@ -229,11 +302,12 @@ def prepare_flac_album(source_dir, dest_dir):
     for picture_type, picture_list  in pictures.items():
         i = 0
         for picture in picture_list:
+            data = picture_db.get(picture.digest)
+            meta = ImageMeta.from_data(data)
             basename = ('flacgen_' + picture_type.name.lower() +
-                    '_' + str(i) + '.' + picture.type())
+                    '_' + str(i) + meta.extension())
             i += 1
-            util.write_file(os.path.join(dest_dir, basename),
-                    picture_db.get(picture.digest))
+            util.write_file(os.path.join(dest_dir, basename), data)
 
             picture_xml.pictures().append(markup.Picture(
                 basename, basename, picture.description))
@@ -324,7 +398,10 @@ def check_split_accuracy(source_dir, split_dir):
 # metaflac uses an older inferior algorithm
 def main():
     PREPARE, ASSEMBLE, CHECKSPLIT = range(3)
-    if len(sys.argv) == 4:
+    fail = False
+    sample_rate = None
+    channels = None
+    if len(sys.argv) in [4, 5, 6]:
         arg = sys.argv[1].lower()
         if arg == 'prepare':
             command = PREPARE
@@ -336,11 +413,23 @@ def main():
             raise ValueError('Unknown command: {}'.format(command))
         source_dir = sys.argv[2]
         dest_dir = sys.argv[3]
+
+        if len(sys.argv) >= 5:
+            if command != PREPARE:
+                fail = True
+            else:
+                sample_rate = int(sys.argv[4])
+                if len(sys.argv) >= 6:
+                    channels = int(sys.argv[5])
     else:
+        fail = True
+
+    if fail:
         raise ValueError('Invalid arguments.')
 
     if command == PREPARE: 
-        exit_code = prepare_flac_album(source_dir, dest_dir)
+        exit_code = prepare_flac_album(source_dir, dest_dir, sample_rate,
+                channels)
     elif command == ASSEMBLE:
         exit_code = assemble_mkv(source_dir, dest_dir)
     elif command == CHECKSPLIT:
