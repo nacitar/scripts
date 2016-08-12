@@ -63,56 +63,87 @@ class Association(object):
     def get(self, value):
         return self._mappings.get(value, {value})
 
+
+class Equation(object):
+    def __init__(self, equation):
+        self._original = equation
+
+        self._solved_for = {}
+        for symbol in self.symbols():
+            solution = sympy.solve(self.original(), symbol)
+            if solution:
+                self._solved_for[symbol] = solution
+
+    def original(self):
+        return self._original
+
+    def solved_for(self, symbol):
+        return self._solved_for.get(symbol)
+
+    def solvable(self):
+        return self._solved_for.keys()
+
+    def symbols(self):
+        return self.original().free_symbols
+
+    def __repr__(self):
+        return '{}={}'.format(self.original().lhs, self.original().rhs)
+
+    def __str__(self):
+        return repr(self)
+
 class System(object):
-    def __init__(self, equations = None, symbols = None):
+    def __init__(self, eqs = None, symbols = None):
         if symbols is None:
             symbols = []
-        if equations is None:
-            equations = []
+        if eqs is None:
+            eqs = []
 
-        self._symbol_equations = {}
+
+        self._eq_mapping_for = {}
         self._symbols = set(symbols)
-        self._unprocessed_equations = []
+        self._unprocessed_eqs = []
         self._associations = Association()
-        self.stage(equations)
+        self.stage(eqs)
 
     def process(self):
-        for equation in self._unprocessed_equations:
-            self._add(equation)
-        self._unprocessed_equations = []
+        for eq in self._unprocessed_eqs:
+            self._add(eq)
+        self._unprocessed_eqs = []
 
     def is_valid_symbol(self, symbol):
         self.process()
         return symbol in self._symbols
 
-    def stage(self, equations):
-        equations = iter_nonstring(equations)
-        self._unprocessed_equations.extend(equations)
+    def stage(self, eqs):
+        eqs = iter_nonstring(eqs)
+        self._unprocessed_eqs.extend(eqs)
 
-    def add(self, equations):
-        self.stage(equations)
+    def add(self, eqs):
+        self.stage(eqs)
         self.process()
 
-    def _add(self, equation):
-        symbols = equation.free_symbols
+    def _add(self, eq):
+        equation = Equation(eq)
+        symbols = equation.symbols()
         # keep track of which variables contribute to the calculations of
         # which others
         self._associations.add(symbols)
         # store the symbols
         self._symbols.update(symbols)
-        for symbol in symbols:
-            # Solve the equation for all symbols present
-            solutions = sympy.solve(equation, symbol)
-            # set removes duplicate solutions for us
-            get_set(self._symbol_equations, symbol, set()).update(solutions)
+
+        for symbol in equation.solvable():
+            for solution in equation.solved_for(symbol):
+                get_set(get_set(self._eq_mapping_for, symbol, {}),
+                        solution, set()).add(equation)
 
     def associated(self, symbol):
         self.process()
         return self._associations.get(symbol)
 
-    def equations(self, symbol):
+    def eq_mapping_for(self, symbol):
         self.process()
-        return self._symbol_equations.get(symbol, set())
+        return self._eq_mapping_for.get(symbol, {})
 
 class Solver(object):
     def __init__(self, system, allow_invalid=False):
@@ -179,12 +210,14 @@ class Solver(object):
             if symbol in self._given:
                 solutions.add(self._given[symbol])
             if valid_symbol:
-                for equation in self._system.equations(symbol):
-                    LOG.debug('-- {} = {}'.format(symbol, equation))
-                    if equation.free_symbols.intersection(visited):
+                for eq, equations in self._system.eq_mapping_for(
+                        symbol).items():
+                    EQ_STRING = '{}={}'.format(symbol, eq)
+                    LOG.debug('-- {} from {}'.format(EQ_STRING, equations))
+                    if eq.free_symbols.intersection(visited):
                         LOG.debug('Equation depends upon a value that was'
-                                ' already visited; skipping: {} = {}'.format(
-                                        symbol, equation))
+                                ' already visited; skipping: {}'.format(
+                                        EQ_STRING))
                         # because this solution depends upon the provided
                         # solution, we know that the result here will be
                         # incomplete, so do not cache it.  We could
@@ -195,22 +228,25 @@ class Solver(object):
                         continue
                     unvisited_solutions = {}
                     next_visited = visited.union({symbol})
-                    for unvisited in equation.free_symbols.difference(visited):
+                    for unvisited in eq.free_symbols.difference(visited):
                         solution = self._get(unvisited, next_visited)
                         if solution is None:
                             LOG.debug('No solution found for {},'
                                     ' skipping.'.format(unvisited))
                             unvisited_solutions.clear()
                             break
-                        LOG.debug('Found: {} = {}'.format(unvisited, solution))
+                        LOG.debug('Found: {}={}'.format(unvisited, solution))
                         unvisited_solutions[unvisited] = solution
                     if unvisited_solutions:
-                        new_solutions = {equation.xreplace(combo)
+                        # TODO: make this track the path to the solution
+                        # +/- sqrt will have already been separated by this
+                        # point
+                        new_solutions = {eq.xreplace(combo)
                                 for combo in value_combinations(
                                         unvisited_solutions)}
                         solutions.update(new_solutions)
-                        LOG.debug('Added solutions: {} = {} = {}'.format(
-                            symbol, equation, new_solutions))
+                        LOG.debug('Added solutions: {}={}'.format(
+                            EQ_STRING, new_solutions))
             # Check assumptions on the symbols
             invalid_solutions = {solution for solution in solutions
                     if not Solver.validate(symbol, solution)}
