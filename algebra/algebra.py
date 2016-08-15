@@ -34,16 +34,6 @@ def iter_nonstring(value):
         return value
     return (value,)
 
-def value_combinations(dictionary):
-    if dictionary:
-        combinations = [ dict() ]
-        for (key, values) in dictionary.items():
-            combinations = [extra_item_dict(combo, key, value)
-                    for combo in combinations
-                    for value in iter_nonstring(values)]
-        return combinations
-    return []
-
 # stages equation additions to reduce script start time
 class Association(object):
     def __init__(self):
@@ -206,9 +196,10 @@ class Solver(object):
             solutions = cached
         else:
             do_cache = True
-            solutions = set()
+            solutions = {}
             if symbol in self._given:
-                solutions.add(self._given[symbol])
+                value = self._given[symbol]
+                get_set(solutions, value, {})[symbol] = value
             if valid_symbol:
                 for eq, equations in self._system.eq_mapping_for(
                         symbol).items():
@@ -226,34 +217,44 @@ class Solver(object):
                         # value yet and thus shouldn't calculate it.
                         do_cache = False
                         continue
-                    unvisited_solutions = {}
                     next_visited = visited.union({symbol})
+
+                    value_combinations = [ dict() ]
+
                     for unvisited in eq.free_symbols.difference(visited):
                         solution = self._get(unvisited, next_visited)
                         if solution is None:
                             LOG.debug('No solution found for {},'
                                     ' skipping.'.format(unvisited))
-                            unvisited_solutions.clear()
+                            value_combinations.clear()
                             break
                         LOG.debug('Found: {}={}'.format(unvisited, solution))
-                        unvisited_solutions[unvisited] = solution
-                    if unvisited_solutions:
+
+                        value_combinations = [extra_item_dict(
+                                combo, unvisited, item)
+                                for combo in value_combinations
+                                for item in solution.items()]
+                    if value_combinations:
                         # TODO: make this track the path to the solution
                         # +/- sqrt will have already been separated by this
                         # point
-                        new_solutions = {eq.xreplace(combo)
-                                for combo in value_combinations(
-                                        unvisited_solutions)}
-                        solutions.update(new_solutions)
-                        LOG.debug('Added solutions: {}={}'.format(
-                            EQ_STRING, new_solutions))
+
+                        for combo in value_combinations:
+                            flat_combo = {key:item[0] for key, item in
+                                combo.items()}
+                            value = eq.xreplace(flat_combo)
+                            get_set(get_set(solutions, value, {}), eq,
+                                []).append(combo)
+                            LOG.debug('Added solution: {}={} using {}'.format(
+                                EQ_STRING, value, combo))
             # Check assumptions on the symbols
-            invalid_solutions = {solution for solution in solutions
-                    if not Solver.validate(symbol, solution)}
+            invalid_solutions = {key for key in solutions.keys()
+                    if not Solver.validate(symbol, key)}
             if invalid_solutions:
                 LOG.debug('Removing invalid solutions: {}'.format(
                         invalid_solutions))
-            solutions.difference_update(invalid_solutions)
+                for key in invalid_solutions:
+                    del solutions[key]
             if do_cache:
                 self._cache[symbol] = solutions
         return solutions if solutions else None
