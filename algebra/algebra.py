@@ -182,8 +182,20 @@ class Solver(object):
                 except:
                     pass
 
-    def get(self, symbol):
-        return self._get(symbol, set())
+    def get(self, symbol, trace = False):
+        result = self._get(symbol, set())
+        if not trace:
+            return set(result.keys())
+        return result
+
+    def get_single(self, symbol):
+        result = self.get(symbol)
+        count = len(result)
+        if count > 1:
+            raise ValueError('Multiple solutions: {}'.format(result))
+        elif count == 1:
+            return result.pop()
+        return None
 
     # calculates a set of all values deducible from the provided equations.
     # if your equations are inconsistent, this code will not care.
@@ -220,7 +232,6 @@ class Solver(object):
                     next_visited = visited.union({symbol})
 
                     value_combinations = [ dict() ]
-
                     for unvisited in eq.free_symbols.difference(visited):
                         solution = self._get(unvisited, next_visited)
                         if solution is None:
@@ -229,16 +240,14 @@ class Solver(object):
                             value_combinations.clear()
                             break
                         LOG.debug('Found: {}={}'.format(unvisited, solution))
-
+                        # This rebuilds value_combinations each time, building
+                        # upon the previous result.
                         value_combinations = [extra_item_dict(
                                 combo, unvisited, item)
                                 for combo in value_combinations
                                 for item in solution.items()]
                     if value_combinations:
-                        # TODO: make this track the path to the solution
-                        # +/- sqrt will have already been separated by this
-                        # point
-
+                        # +/- sqrt will have already been separated
                         for combo in value_combinations:
                             flat_combo = {key:item[0] for key, item in
                                 combo.items()}
@@ -271,20 +280,20 @@ class Point(object):
         return repr((self.x, self.y))
 
 class Circle(object):
-    RADIUS, DIAMETER, CIRCUMFERENCE, AREA = sympy.symbols(
+    RADIUS, DIAMETER, CIRCUMFERENCE, AREA = SYMBOLS = sympy.symbols(
             'radius diameter circumference area', nonnegative=True)
     SYSTEM = System([
             sympy.Eq(DIAMETER, 2 * RADIUS),
             sympy.Eq(CIRCUMFERENCE, 2 * sympy.pi * RADIUS),
-            sympy.Eq(AREA, sympy.pi * RADIUS**2)])
+            sympy.Eq(AREA, sympy.pi * RADIUS**2),
+            ], SYMBOLS)
 
     def __init__(self, symbol, value):
         self._solver = Solver(self.__class__.SYSTEM)
-
+        self.get = self._solver.get_single
+        #self.set = self._solver.set
         self._solver.set(symbol, value)
 
-    def get(self, symbol):
-        return self._solver.get(symbol)
 
     def radius(self):
         return self.get(self.__class__.RADIUS)
