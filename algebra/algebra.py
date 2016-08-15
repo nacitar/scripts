@@ -91,15 +91,28 @@ class System(object):
 
 
         self._eq_mapping_for = {}
-        self._symbols = set(symbols)
+        self._symbols = set()
+        self._name_to_symbol = {}
         self._unprocessed_eqs = []
         self._associations = Association()
+
+        self._add_symbols(symbols)
         self.stage(eqs)
 
     def process(self):
         for eq in self._unprocessed_eqs:
             self._add(eq)
         self._unprocessed_eqs = []
+
+    def _add_symbols(self, symbols):
+        for symbol in symbols:
+            self._symbols.add(symbol)
+            if get_set(self._name_to_symbol, symbol.name, symbol) != symbol:
+                raise ValueError('Duplicate symbol with different flags.')
+
+    def lookup_symbol(self, name):
+        self.process()
+        return self._name_to_symbol.get(name)
 
     def is_valid_symbol(self, symbol):
         self.process()
@@ -120,7 +133,7 @@ class System(object):
         # which others
         self._associations.add(symbols)
         # store the symbols
-        self._symbols.update(symbols)
+        self._add_symbols(symbols)
 
         for symbol in equation.solvable():
             for solution in equation.solved_for(symbol):
@@ -153,11 +166,24 @@ class Solver(object):
             return False
         return True
 
+    def _symbol(self, name):
+        symbol = self._system.lookup_symbol(name)
+        if symbol is None:
+            symbol = sympy.Symbol(name)
+        return symbol
+
     def clear(self):
         self._cache.clear()
         self._given.clear()
 
-    def set(self, symbol, value):
+    def set(self, **kw):
+        for key, value in kw.items():
+            self.set_name(key, value)
+
+    def set_name(self, name, value):
+        self.set_symbol(self._symbol(name), value)
+
+    def set_symbol(self, symbol, value):
         clear_associated_cache = False
         self._check_symbol(symbol)
 
@@ -182,20 +208,28 @@ class Solver(object):
                 except:
                     pass
 
-    def get(self, symbol, trace = False):
+    def get_symbol(self, symbol, trace=False):
         result = self._get(symbol, set())
-        if not trace:
+        if result and not trace:
             return set(result.keys())
         return result
 
-    def get_single(self, symbol):
-        result = self.get(symbol)
-        count = len(result)
-        if count > 1:
-            raise ValueError('Multiple solutions: {}'.format(result))
-        elif count == 1:
-            return result.pop()
-        return None
+    def get_symbol_single(self, symbol):
+        result = self.get_symbol(symbol)
+        if result:
+            count = len(result)
+            if count > 1:
+                raise ValueError('Multiple solutions for "{}": {}'.format(
+                    symbol, result))
+            elif count == 1:
+                return result.pop()
+        raise ValueError('No solutions for "{}"'.format(symbol))
+
+    def get_name(self, name, trace=False):
+        return self.get_symbol(self._symbol(name), trace=trace)
+
+    def get_name_single(self, name):
+        return self.get_symbol_single(self._symbol(name))
 
     # calculates a set of all values deducible from the provided equations.
     # if your equations are inconsistent, this code will not care.
@@ -288,38 +322,72 @@ class Circle(object):
             sympy.Eq(AREA, sympy.pi * RADIUS**2),
             ], SYMBOLS)
 
-    def __init__(self, symbol, value):
+    def __init__(self, **kw):
         self._solver = Solver(self.__class__.SYSTEM)
-        self.get = self._solver.get_single
-        #self.set = self._solver.set
-        self._solver.set(symbol, value)
-
+        self.set = self._solver.set
+        self.set(**kw)
 
     def radius(self):
-        return self.get(self.__class__.RADIUS)
+        return self._solver.get_symbol_single(self.__class__.RADIUS)
 
     def diameter(self):
-        return self.get(self.__class__.DIAMETER)
+        return self._solver.get_symbol_single(self.__class__.DIAMETER)
 
     def circumference(self):
-        return self.get(self.__class__.CIRCUMFERENCE)
+        return self._solver.get_symbol_single(self.__class__.CIRCUMFERENCE)
 
     def area(self):
-        return self.get(self.__class__.AREA)
+        return self._solver.get_symbol_single(self.__class__.AREA)
 
     # 0 degrees == right center, progressing counter-clockwise
     def point(self, radians):
-        return {Point(radius * sympy.cos(radians),
-                radius * sympy.sin(radians)) for radius in self.radius()}
+        radius = self.radius()
+        return Point(radius * sympy.cos(radians), radius * sympy.sin(radians))
+
+class Cylinder(object):
+    RADIUS, DIAMETER, HEIGHT, AREA, VOLUME = SYMBOLS = sympy.symbols(
+            'radius diameter height area volume', nonnegative=True)
+
+    SYSTEM = System([
+            sympy.Eq(DIAMETER, 2 * RADIUS),
+            sympy.Eq(AREA, 2 * sympy.pi * RADIUS * (HEIGHT + RADIUS)),
+            sympy.Eq(VOLUME, sympy.pi * RADIUS**2 * HEIGHT)
+            ], SYMBOLS)
+
+    def __init__(self, **kw):
+        self._solver = Solver(self.__class__.SYSTEM)
+        self.set = self._solver.set
+        self.set(**kw)
+
+    def radius(self):
+        return self._solver.get_symbol_single(self.__class__.RADIUS)
+
+    def diameter(self):
+        return self._solver.get_symbol_single(self.__class__.DIAMETER)
+
+    def height(self):
+        return self._solver.get_symbol_single(self.__class__.HEIGHT)
+
+    def area(self):
+        return self._solver.get_symbol_single(self.__class__.AREA)
+
+    def volume(self):
+        return self._solver.get_symbol_single(self.__class__.VOLUME)
+
+    def circle(self):
+        return Circle(radius=self.radius())
 
 def main():
 
     LOG.debug('Processing systems.')
     Circle.SYSTEM.process()
+    Cylinder.SYSTEM.process()
     LOG.debug('Processing complete.')
 
-    x = Circle(Circle.AREA, 25 * sympy.pi)
-    print(x.get(Circle.RADIUS))
+    x = Circle(area=25 * sympy.pi)
+    print(x.radius())
+    x = Cylinder(radius=5, height=2)
+    x.area()
     import pdb
     pdb.set_trace()
     return 0
