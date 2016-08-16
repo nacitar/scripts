@@ -8,9 +8,45 @@ from sympy.physics.units import *
 import logging
 import pdb
 import copy
+import re
 
 logging.basicConfig(level=logging.DEBUG)
 LOG = logging.getLogger('algebra')
+
+
+# Simple class to allow multiplying and dividing to transform values via an
+# equation.  This is primarily useful for offset units, which are natively
+# unsupported by sympy afaik.
+class EqUnit(object):
+    _REAL_VALUE = sympy.symbols('__EqUnit_REAL_VALUE__')
+    VALUE = sympy.symbols('__EqUnit_VALUE__')
+    def __init__(self, equation):
+        # TODO: make sure VALUE is in the equation
+        self._equation = equation
+
+        try:
+            reverse = solve(
+                    Eq(EqUnit._REAL_VALUE, self._equation), EqUnit.VALUE,
+                    dict=True)
+            self._reverse_equation = reverse[0][EqUnit.VALUE]
+        except:
+            logging.warning('Equation irreversible: %s' % self._equation)
+            self._reverse_equation = None
+
+
+    def __rmul__(self, other):
+        return self._equation.xreplace({EqUnit.VALUE: other})
+
+    def __rtruediv__(self, other):
+        if self._reverse_equation is None:
+            raise RuntimeError('Equation irreversible: %s' % self._equation)
+        return self._reverse_equation.xreplace({EqUnit._REAL_VALUE: other})
+
+mod_360 = EqUnit(EqUnit.VALUE % (360*deg))
+btdc = EqUnit(90 * deg + EqUnit.VALUE)
+atdc = EqUnit(90 * deg - EqUnit.VALUE)
+bbdc = EqUnit(270 * deg + EqUnit.VALUE)
+abdc = EqUnit(270 * deg - EqUnit.VALUE)
 
 ci = inch**3
 cc = cm**3
@@ -149,11 +185,13 @@ class System(object):
         return self._eq_mapping_for.get(symbol, {})
 
 class Solver(object):
-    def __init__(self, system, allow_invalid=False):
+    def __init__(self, system, allow_invalid=False, **kw):
         self._system = system
         self._given = {}
         self._allow_invalid = allow_invalid
         self._cache = {}
+
+        self.set(**kw)
 
     @staticmethod
     def validate(symbol, value):
@@ -175,6 +213,9 @@ class Solver(object):
     def clear(self):
         self._cache.clear()
         self._given.clear()
+
+    def given(self):
+        return dict(self._given)
 
     def set(self, **kw):
         for key, value in kw.items():
@@ -302,6 +343,21 @@ class Solver(object):
                 self._cache[symbol] = solutions
         return solutions if solutions else None
 
+# Metaclass to add acessors for SYMBOLS, using _solver
+class SymbolAccessor(type):
+    def __new__(cls, clsname, superclasses, attributedict):
+        new_class = type.__new__(cls, clsname, superclasses, attributedict)
+        for symbol in getattr(new_class, 'SYMBOLS', ()):
+            setattr(new_class, symbol.name, property(
+                (lambda symbol: lambda self:
+                        self._solver.get_symbol_single(symbol))(symbol),
+                (lambda symbol: lambda self, value:
+                        self._solver.set_symbol(symbol, value))(symbol)
+                ))
+        setattr(new_class, 'given', property(
+            lambda self: self._solver.given()))
+        return new_class
+
 class Point(object):
     def __init__(self, x=0, y=0):
         self.x = x
@@ -313,7 +369,7 @@ class Point(object):
     def __repr__(self):
         return repr((self.x, self.y))
 
-class Circle(object):
+class Circle(metaclass=SymbolAccessor):
     RADIUS, DIAMETER, CIRCUMFERENCE, AREA = SYMBOLS = sympy.symbols(
             'radius diameter circumference area', nonnegative=True)
     SYSTEM = System([
@@ -323,31 +379,16 @@ class Circle(object):
             ], SYMBOLS)
 
     def __init__(self, **kw):
-        self._solver = Solver(self.__class__.SYSTEM)
-        self.set = self._solver.set
-        self.set(**kw)
-
-    def radius(self):
-        return self._solver.get_symbol_single(self.__class__.RADIUS)
-
-    def diameter(self):
-        return self._solver.get_symbol_single(self.__class__.DIAMETER)
-
-    def circumference(self):
-        return self._solver.get_symbol_single(self.__class__.CIRCUMFERENCE)
-
-    def area(self):
-        return self._solver.get_symbol_single(self.__class__.AREA)
+        self._solver = Solver(self.__class__.SYSTEM, **kw)
 
     # 0 degrees == right center, progressing counter-clockwise
     def point(self, radians):
-        radius = self.radius()
+        radius = self.radius
         return Point(radius * sympy.cos(radians), radius * sympy.sin(radians))
 
-class Cylinder(object):
+class Cylinder(metaclass=SymbolAccessor):
     RADIUS, DIAMETER, HEIGHT, AREA, VOLUME = SYMBOLS = sympy.symbols(
             'radius diameter height area volume', nonnegative=True)
-
     SYSTEM = System([
             sympy.Eq(DIAMETER, 2 * RADIUS),
             sympy.Eq(AREA, 2 * sympy.pi * RADIUS * (HEIGHT + RADIUS)),
@@ -355,42 +396,192 @@ class Cylinder(object):
             ], SYMBOLS)
 
     def __init__(self, **kw):
-        self._solver = Solver(self.__class__.SYSTEM)
-        self.set = self._solver.set
-        self.set(**kw)
+        self._solver = Solver(self.__class__.SYSTEM, **kw)
 
-    def radius(self):
-        return self._solver.get_symbol_single(self.__class__.RADIUS)
-
-    def diameter(self):
-        return self._solver.get_symbol_single(self.__class__.DIAMETER)
-
-    def height(self):
-        return self._solver.get_symbol_single(self.__class__.HEIGHT)
-
-    def area(self):
-        return self._solver.get_symbol_single(self.__class__.AREA)
-
-    def volume(self):
-        return self._solver.get_symbol_single(self.__class__.VOLUME)
-
+    @property
     def circle(self):
-        return Circle(radius=self.radius())
+        return Circle(radius=self.radius)
+
+class RightTriangle(metaclass=SymbolAccessor):
+    SIDE_A, SIDE_B, HYPOTENUSE = SYMBOLS = sympy.symbols(
+            'side_a side_b hypotenuse', nonnegative=True)
+    SYSTEM = System([
+            sympy.Eq(HYPOTENUSE**2, SIDE_A**2 + SIDE_B**2)
+            ], SYMBOLS)
+
+    def __init__(self, **kw):
+        self._solver = Solver(self.__class__.SYSTEM, **kw)
+
+
+class Tire(metaclass=SymbolAccessor):
+    WIDTH, SIDEWALL, RIM, ASPECT_RATIO, DIAMETER = SYMBOLS = sympy.symbols(
+            'width sidewall rim aspect_ratio diameter', nonnegative=True)
+    SYSTEM = System([
+            sympy.Eq(DIAMETER, RIM + SIDEWALL * 2),
+            sympy.Eq(SIDEWALL, WIDTH * ASPECT_RATIO / 100),
+            ], SYMBOLS)
+
+    def __init__(self, **kw):
+        self._solver = Solver(Tire.SYSTEM, **kw)
+
+    @staticmethod
+    def fromString(value):
+        parts = re.split('/| *[rR]',value)
+        if len(parts) == 3:
+            width = parts[0]
+            aspect_ratio = parts[1]
+            rim = parts[2]
+            if width.isdigit() and aspect_ratio.isdigit() and rim.isdigit():
+                return Tire(width=int(width)*mm,
+                        aspect_ratio=int(aspect_ratio),
+                        rim=int(rim)*inch)
+        raise RuntimeError('Bad format.')
+
+    @property
+    def cylinder(self):
+        return Cylinder(diameter=self.diameter)
+
+class CamShaft(object):
+    INTAKE_OPEN, INTAKE_CLOSE, INTAKE_DURATION = sympy.symbols(
+            'intake_open intake_close intake_duration')
+    EXHAUST_OPEN, EXHAUST_CLOSE, EXHAUST_DURATION = sympy.symbols(
+            'exhaust_open exhaust_close exhaust_duration')
+    INTAKE_CENTERLINE, EXHAUST_CENTERLINE = sympy.symbols(
+            'intake_centerline exhaust_centerline')
+    LOBE_SEPARATION_ANGLE = sympy.symbols('lobe_separation_angle')
+    ADVERTISED_INTAKE_OPEN, ADVERTISED_INTAKE_CLOSE = sympy.symbols(
+            'advertised_intake_open advertised_intake_close')
+    ADVERTISED_EXHAUST_OPEN, ADVERTISED_EXHAUST_CLOSE = sympy.symbols(
+            'advertised_exhaust_open advertised_exhaust_close')
+    ADVERTISED_INTAKE_DURATION, ADVERTISED_EXHAUST_DURATION = sympy.symbols(
+            'advertised_intake_duration advertised_exhaust_duration')
+
+    SYSTEM = System([
+            # The (open - close) logic seems backwards intuitively, but it is
+            # this way because the circle's degrees advance counter-clockwise,
+            # but the crankshaft spins clockwise.
+            sympy.Eq(INTAKE_DURATION, INTAKE_OPEN - INTAKE_CLOSE),
+            sympy.Eq(EXHAUST_DURATION, EXHAUST_OPEN - EXHAUST_CLOSE),
+            sympy.Eq(ADVERTISED_INTAKE_DURATION,
+                    ADVERTISED_INTAKE_OPEN - ADVERTISED_INTAKE_CLOSE),
+            sympy.Eq(ADVERTISED_EXHAUST_DURATION,
+                    ADVERTISED_EXHAUST_OPEN - ADVERTISED_EXHAUST_CLOSE),
+
+            # Assumes a camshaft with symmetric lobes, centering the duration
+            # about the centerline..
+            sympy.Eq(ADVERTISED_INTAKE_OPEN, INTAKE_CENTERLINE +
+                ADVERTISED_INTAKE_DURATION / 2),
+            sympy.Eq(ADVERTISED_INTAKE_CLOSE, INTAKE_CENTERLINE -
+                ADVERTISED_INTAKE_DURATION / 2),
+
+            sympy.Eq(ADVERTISED_EXHAUST_OPEN, EXHAUST_CENTERLINE +
+                ADVERTISED_EXHAUST_DURATION / 2),
+            sympy.Eq(ADVERTISED_EXHAUST_CLOSE, EXHAUST_CENTERLINE -
+                ADVERTISED_EXHAUST_DURATION / 2),
+
+            sympy.Eq(LOBE_SEPARATION_ANGLE, (EXHAUST_CENTERLINE -
+                INTAKE_CENTERLINE)),
+            ])
+    # All values provided, other than the advertised durations, should be
+    # figures obtained at 0.050" tappet lift or the math won't work.
+    def __init__(self, **kw):
+        self._solver = Solver(CamShaft.SYSTEM, allow_invalid=True, **kw)
+
+    def advance(self):
+        # if this is positive, the cam is advanced
+        # if this is 0, the cam is "straight up"
+        # if this is negative, the cam is retarded
+        return self.lobe_separation_angle - self.intake_centerline
+#for symbol in Tire.SYMBOLS:
+#    setattr(Tire,symbol.name,property((lambda symbol: lambda self:
+#        self._solver.get_symbol_single(symbol))(symbol)))
 
 def main():
 
     LOG.debug('Processing systems.')
-    Circle.SYSTEM.process()
-    Cylinder.SYSTEM.process()
+    CamShaft.SYSTEM.process()
     LOG.debug('Processing complete.')
 
+    x = CamShaft(
+            intake_centerline=sympy.Rational(106) * crank_deg * atdc,
+            intake_open=sympy.Rational(3.5) * crank_deg * btdc,
+            intake_close=sympy.Rational(35.5) * crank_deg * abdc,
+            intake_duration=219 * crank_deg,
+            advertised_intake_duration=271 * crank_deg,
+
+            exhaust_open=sympy.Rational(51.5) * crank_deg * bbdc,
+            exhaust_close=sympy.Rational(-4.5) * crank_deg * atdc,
+            exhaust_duration=227 * crank_deg,
+            advertised_exhaust_duration=279 * crank_deg,
+
+            lobe_separation_angle=112 * cam_deg,
+
+            gross_intake_valve_lift=sympy.Rational(0.515) * inch,
+            gross_exhaust_valve_list=sympy.Rational(0.530) * inch,
+            intake_rocker_ratio=sympy.Rational(1.5) * inch,
+            exhaust_rocker_ratio=sympy.Rational(1.5) * inch,
+            intake_valve_adjustment=0 * inch,
+            exhaust_valve_adjustment=0 * inch,
+            )
+
+    import pdb
+    pdb.set_trace()
+    return 0
+
+    LOG.debug('Processing systems.')
+    Circle.SYSTEM.process()
+    Cylinder.SYSTEM.process()
+    RightTriangle.SYSTEM.process()
+    Tire.SYSTEM.process()
+    LOG.debug('Processing complete.')
     x = Circle(area=25 * sympy.pi)
-    print(x.radius())
+    print(x.radius)
     x = Cylinder(radius=5, height=2)
-    x.area()
+    print(x.area)
+    x = RightTriangle(side_a=3, side_b=4)
+    print(x.hypotenuse)
+    x = RightTriangle(side_a=3, hypotenuse=5)
+    print(x.side_b)
+    x = Tire.fromString('235/60 R15')
+    print(x.width)
+    print(x.cylinder.circle.circumference)
     import pdb
     pdb.set_trace()
     return 0
 
 if __name__ == '__main__':
     sys.exit(main())
+
+
+
+#    def exhaust_centerline(self):
+#        return self.get('exhaust_centerline') / btdc * mod_360 / crank_deg
+#    def exhaust_open(self):
+#        return self.get('exhaust_open') / bbdc * mod_360 / crank_deg
+#    def exhaust_close(self):
+#        return self.get('exhaust_close') / atdc * mod_360 / crank_deg
+#    def exhaust_duration(self):
+#        return self.get('exhaust_duration') * mod_360 / crank_deg
+#    def advertised_exhaust_open(self):
+#        return self.get('advertised_exhaust_open') / bbdc * mod_360 / crank_deg
+#    def advertised_exhaust_close(self):
+#        return self.get('advertised_exhaust_close') / atdc * mod_360 / crank_deg
+#    def advertised_exhaust_duration(self):
+#        return self.get('advertised_exhaust_duration') * mod_360 / crank_deg
+#    def intake_centerline(self):
+#        return self.get('intake_centerline') / atdc * mod_360 / crank_deg
+#    def intake_open(self):
+#        return self.get('intake_open') / btdc * mod_360 / crank_deg
+#    def intake_close(self):
+#        return self.get('intake_close') / abdc * mod_360 / crank_deg
+#    def intake_duration(self):
+#        return self.get('intake_duration') * mod_360 / crank_deg
+#    def advertised_intake_open(self):
+#        return self.get('advertised_intake_open') / btdc * mod_360 / crank_deg
+#    def advertised_intake_close(self):
+#        return self.get('advertised_intake_close') / abdc * mod_360 / crank_deg
+#    def advertised_intake_duration(self):
+#        return self.get('advertised_intake_duration') * mod_360 / crank_deg
+#    def lobe_separation_angle(self):
+#        return self.get('lobe_separation_angle') * mod_360 / cam_deg
+
