@@ -256,7 +256,7 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
 
         tag_xml.tags().append(track_tag)
         for key, value in track.meta.comments.items():
-            field = album_field_map.get(key)
+            field = album_field_map.get(key.upper())
             if field is not None:
                 orig_value = field.value()
                 if orig_value and orig_value != value:
@@ -264,9 +264,9 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
                             ' {}: {} != {}'.format(key, orig_value, value))
                 field.set_value(value)
             else:
-                field = track_field_map.get(key)
+                field = track_field_map.get(key.upper())
                 if field is not None:
-                    if key == 'ARTIST':
+                    if key.upper() == 'ARTIST':
                         album_value = album_artist.value()
                         if not album_value:
                             # set album artist
