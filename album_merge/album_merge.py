@@ -133,7 +133,7 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
         name = os.path.splitext(os.path.basename(image.filename))[0]
         suffix = '_land' if image.meta.landscape() else ''
         ext = image.meta.extension()
-        if name.lower() == 'cover':
+        if name.lower() == 'cover' + suffix:
             name = 'full_cover' + suffix
         if name.lower() in ['full_cover', 'full_cover_land']:
             for gen_name, width, height in COVER_OPTIONS[image.meta.landscape()]:
