@@ -50,3 +50,6 @@ class Timestamp(object):
 
     def __str__(self):
         return '{:02d}:{:02d}:{:02d}.{:09d}'.format(*self.components())
+
+    def __repr__(self):
+        return "<timestamp.Timestamp '{}'>".format(str(self))

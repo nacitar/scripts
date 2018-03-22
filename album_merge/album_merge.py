@@ -9,6 +9,7 @@ import unit
 import uid
 import markup
 import flac
+import mp3
 import util
 
 class ImageMeta(object):
@@ -90,23 +91,34 @@ class FileMeta(object):
         self.filename = filename
         self.meta = meta
 
+AUDIO_FLAC = 1
+AUDIO_MP3 = 2
+AUDIO_ERROR = 3
+
 def scanDirectory(dirname, db):
     files = os.listdir(dirname)
     files.sort()  # relying on file names to be sorted
     tracks = []
     images = []
-
+    audio_type = 0
     for basename in files:
         filename = os.path.join(dirname, basename)
         ext = os.path.splitext(basename)[1].lower()
         if ext == '.flac':
             tracks.append(FileMeta(filename,
                     flac.FLACMeta.from_file(filename, db)))
+            audio_type = audio_type | AUDIO_FLAC
+        if ext == '.mp3':
+            tracks.append(FileMeta(filename,
+                    mp3.MP3Meta.from_file(filename, db)))
+            audio_type = audio_type | AUDIO_MP3
         if ext in ['.jpg', '.jpeg', '.png']:
             images.append(FileMeta(filename,
                     ImageMeta.from_file(filename)))
+        if audio_type == AUDIO_ERROR:
+            raise RuntimeError("ERROR: Mixing flac and mp3 input files!")
 
-    return (tracks, images)
+    return (audio_type, tracks, images)
 
 #cover.jpg              - 600 x [>=600] (portrait/square) first attachment
 #small_cover.jpg        - 120 x [>=120] (portrait/square)
@@ -126,7 +138,7 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
     picture_xml = markup.PictureFile()
 
 
-    tracks, images = scanDirectory(source_dir, picture_db)
+    audio_type, tracks, images = scanDirectory(source_dir, picture_db)
 
     image_names = set()
     for image in images:
@@ -198,8 +210,28 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
         channels = max([track.meta.channels for track in tracks])
         print('Highest channels: {}'.format(channels))
 
+    bit_rate = None
+
     for track in tracks:
-        if (sample_rate != track.meta.sample_rate or
+        if (audio_type == AUDIO_MP3):
+            if (sample_rate != track.meta.sample_rate or
+                    channels != track.meta.channels):
+                raise RuntimeError('Inconsistent sample rate/channels/bit rate!')
+            newfile = os.path.join(dest_dir, os.path.basename(track.filename))
+            if (not mp3.strip_all_metadata(track.filename, newfile)):
+                raise RuntimeError('Failed to strip metadata from: {}'.format(
+                    track.filename))
+            track.filename = newfile
+            # have to recalculate
+            stripped_bit_rate = util.sox_info(newfile)['Bit Rate']
+            if bit_rate is None:
+                bit_rate = stripped_bit_rate
+            elif bit_rate != stripped_bit_rate:
+                raise RuntimeError('Inconsistent bit rate!')
+
+
+        if (audio_type == AUDIO_FLAC and
+                sample_rate != track.meta.sample_rate or
                 channels != track.meta.channels):
             print('Resampling track from {}:{} to {}:{}'.format(
                     track.meta.sample_rate, track.meta.channels,
@@ -282,10 +314,10 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
                     print('Ignoring tag:', key, '=', value)
         # Remove empty fields
         for field in track_field_map.values():
-            if not field.value():
+            if ((audio_type == AUDIO_FLAC and not field.value()) or
+                    (audio_type == AUDIO_MP3 and field == 'UNSYNCEDLYRICS')):
                 track_tag.fields().remove(field)
 
-                        
         # Pictures
         for picture_type, picture_list in track.meta.pictures.items():
             our_list = pictures.get(picture_type, [])
@@ -314,31 +346,49 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
     with open(os.path.join(dest_dir, 'pictures.xml'), 'wb') as handle:
         picture_xml.write(handle)
 
-    # req sox
-    sox = subprocess.Popen(['sox'] + [track.filename for track in tracks] +
-            ['-t', 'wav', '-'], stdout=subprocess.PIPE,
-            stdin=subprocess.DEVNULL)  # print errors to terminal
+    if audio_type == AUDIO_FLAC:
+        # req sox
+        sox = subprocess.Popen(['sox'] + [track.filename for track in tracks] +
+                ['-t', 'wav', '-'], stdout=subprocess.PIPE,
+                stdin=subprocess.DEVNULL)  # print errors to terminal
 
-    flac_options = ['--force', '--no-preserve-modtime', '--best']
-    flac_seekpoints = ['--seekpoint={}'.format(sample)
-                    for sample in seekpoints]
-    output = os.path.join(dest_dir, 'merged.flac')
-    # req flac
-    flac_encoder = subprocess.Popen(
-            ['flac'] + flac_options + flac_seekpoints + ['-o', output, '-'],
-            stdin=sox.stdout)  # print status to terminal
-    flac_ret = flac_encoder.wait()
-    sox_ret = sox.wait()
-    if flac_ret != 0:
-        print("ERROR: FLAC encoder exited with code {}".format(flac_ret),
-                file=sys.stderr)
-    if sox_ret != 0:
-        print("ERROR: SOX exited with code {}".format(sox_ret),
-                file=sys.stderr)
-    return int(not (flac_ret == 0 and sox_ret == 0))  # 0 == success
+        flac_options = ['--force', '--no-preserve-modtime', '--best']
+        flac_seekpoints = ['--seekpoint={}'.format(sample)
+                        for sample in seekpoints]
+        output = os.path.join(dest_dir, 'merged.flac')
+        # req flac
+        flac_encoder = subprocess.Popen(
+                ['flac'] + flac_options + flac_seekpoints + ['-o', output, '-'],
+                stdin=sox.stdout)  # print status to terminal
+        flac_ret = flac_encoder.wait()
+        sox_ret = sox.wait()
+        if flac_ret != 0:
+            print("ERROR: FLAC encoder exited with code {}".format(flac_ret),
+                    file=sys.stderr)
+        if sox_ret != 0:
+            print("ERROR: SOX exited with code {}".format(sox_ret),
+                    file=sys.stderr)
+        return int(not (flac_ret == 0 and sox_ret == 0))  # 0 == success
+    elif audio_type == AUDIO_MP3:
+        output = os.path.join(dest_dir, 'merged.mp3')
+        cat_ret = 1
+        with open(output, 'wb') as outfile:
+            cat = subprocess.Popen(['cat'] +
+                    [track.filename for track in tracks],
+                    stdout=outfile,
+                    stdin=subprocess.DEVNULL)  # print errors to terminal
+            cat_ret = cat.wait()
+        if cat_ret != 0:
+            print("ERROR: CAT exited with code {}".format(cat_ret),
+                    file=sys.stderr)
+        return int(not (cat_ret == 0))  # 0 == success
+    raise RuntimeError('Unsupported audio type!')
+
 
 def assemble_mkv(source_dir, dest_dir):
     input_file = os.path.join(source_dir, 'merged.flac')
+    if not os.path.exists(input_file):
+        input_file = os.path.join(source_dir, 'merged.mp3')
     output_file = os.path.join(dest_dir, 'output.mka')
     command = ['mkvmerge', '-o', output_file,
             '--chapters', os.path.join(source_dir, 'chapters.xml'),
