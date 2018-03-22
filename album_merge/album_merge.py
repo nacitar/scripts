@@ -140,7 +140,7 @@ def prepare_flac_album(source_dir, dest_dir, sample_rate = None,
                 dest_name = gen_name + suffix + ext
                 # req imagemagick
                 convert = subprocess.Popen(['convert', image.filename,
-                        '-resize', '{}x{}'.format(width, height),
+                        '-adaptive-resize', '{}x{}'.format(width, height),
                         os.path.join(dest_dir, dest_name)])
                 if convert.wait() != 0:
                     raise RuntimeError('Error generating image:'
