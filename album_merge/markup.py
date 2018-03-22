@@ -62,17 +62,44 @@ class Node(object):
                 xml_declaration=False)
 
     def prettify(self, indent='  '):
+        # begin by parsing the root element, which is top-level (0)
         queue = [(0, self.element())]  # (level, element)
         while queue:
+            # get the first (next) element
             level, element = queue.pop(0)
+            # create a list of its direct children, in order, setting their
+            # level to be one-greater than the current node as they are
+            # its children.
             children = [(level + 1, child) for child in list(element)]
+            # if there are any children whatsoever, the close tag for this
+            # element won't go directly next to the open, meaning
+            # it won't be like: <element></element>
+            # so add a newline and indentation to the text of this element
+            # such that the first child will have proper indentation
+            # preceding it.
+            #
+            # NOTE: this approach of using the 'text' element effectively
+            # makes it so that if any given element has children, any text
+            # within it is ignored.  It's largely bad practice to use the text
+            # component of elements which contain children anyway, though..
             if children:
                 element.text = '\n' + indent * (level+1)  # for child open
-            if queue:
-                element.tail = '\n' + indent * queue[0][0]  # for sibling open
-            else:
-                element.tail = '\n' + indent * (level-1)  # for parent close
-            queue[0:0] = children  # prepend so children come before siblings
+            # if there are any more elements to process, just as we did with
+            # our children above, we need to ensure they are properly indented.
+            # because this spacing does not need to go within the element, but
+            # rather after the close tag, the spaces are added to tail.
+            #
+            # however, if this is the very last tag to process, we still need
+            # to provide indentation in the tail such that the close-tag of our
+            # parent is properly indented... hence the 'else' clause
+            if queue:  # more elements to process
+                # indentation for next element's open tag
+                element.tail = '\n' + indent * queue[0][0]
+            else:  # last element
+                # indentation for parent close tag
+                element.tail = '\n' + indent * (level-1)
+            # prepend the children so they are parsed prior to siblings
+            queue[0:0] = children
 
     def __str__(self):
         handle = io.StringIO()
